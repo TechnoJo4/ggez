@@ -22,6 +22,7 @@ x-bridge-sockets: &bridge-sockets
     create_host_path: false
 
 x-guest-bridge: &guest-bridge
+  # Set ggez.guest-tcp-port only to generate a guest vsock -> TCP adapter.
   <<: *gateway
   image: ggez/guest-bridge:local
   build:
@@ -36,8 +37,6 @@ x-guest-bridge: &guest-bridge
 services:
   ssh-bridge:
     <<: *guest-bridge
-    labels:
-      ggez.guest-tcp-port: "22"
     command:
       - --guest-listener-vsock-port
       - "22"
@@ -48,8 +47,6 @@ services:
 
   tame-rpc-bridge:
     <<: *guest-bridge
-    labels:
-      ggez.guest-tcp-port: "6702"
     command:
       - --guest-listener-vsock-port
       - "6702"

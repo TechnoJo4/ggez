@@ -78,7 +78,8 @@ class ExportTests(unittest.TestCase):
             generator.export(generator.compose_config(), self.output)
         deployment = json.loads((self.output / "deployment.json").read_text())
         self.assertEqual(deployment["read-only-git"]["upstreams"], self.upstreams)
-        self.assertEqual(deployment["ssh-bridge"]["vsockPort"], 22)
+        self.assertNotIn("ssh-bridge", deployment)
+        self.assertNotIn("tame-rpc-bridge", deployment)
         self.assertEqual(deployment["connect-proxy"]["vsockPort"], 5004)
         self.assertEqual(deployment["inference"]["vsockPort"], 5001)
         self.assertEqual(deployment["connect-proxy"]["nixSubstituters"], ["https://cache.nixos.org"])
@@ -93,6 +94,17 @@ class ExportTests(unittest.TestCase):
         with self.assertRaises(OSError):
             generator.export(self.compose, self.output)
         self.assertFalse(self.output.exists())
+
+    def test_native_vsock_bridge_removes_the_previous_adapter_import(self):
+        generator.export(self.compose, self.output)
+        self.assertIn('deployment."ssh"', (self.output / "guest.nix").read_text())
+        del self.compose["services"]["ssh"]["labels"]
+        for labels in [None, {}]:
+            if labels is not None:
+                self.compose["services"]["ssh"]["labels"] = labels
+            generator.export(self.compose, self.output)
+            self.assertNotIn("ssh", json.loads((self.output / "deployment.json").read_text()))
+            self.assertNotIn('deployment."ssh"', (self.output / "guest.nix").read_text())
 
     def test_git_redirect_bases_stay_on_the_host(self):
         self.upstreams["tangled"] = {"url": "https://tangled.org/", "redirect_bases": ["https://knot1.tangled.sh/"]}

@@ -62,6 +62,9 @@ def export(compose, output):
                 raise ValueError("only one CONNECT proxy can configure the guest HTTPS proxy")
             connect_proxy = True
         if gateway == "guest-bridge":
+            # Native vsock listeners need no guest-side adapter.
+            if "ggez.guest-tcp-port" not in service.get("labels", {}):
+                continue
             port = int(argument(service, "--guest-listener-vsock-port"))
             tcp = int(service["labels"]["ggez.guest-tcp-port"])
             if port in vsock_listeners:
