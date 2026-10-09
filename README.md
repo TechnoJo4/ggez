@@ -6,6 +6,7 @@
 | [read-only-http](read-only-http/) | guest -> host: approved reads from a fixed HTTP origin |
 | [inference](inference/) | guest -> host: one inference policy with named upstream routes |
 | [read-only-git](read-only-git/) | guest -> host: named Git upstreams, clone/fetch only |
+| [connect-proxy](connect-proxy/) | guest -> host: TLS termination and explicit read policies for HTTPS clients |
 
 ## deployment guidelines
 

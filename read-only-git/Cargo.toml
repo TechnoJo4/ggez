@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+git-policy = { path = "../git-policy" }
 bytes = "1.10"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 http-body-util = "0.1"
@@ -15,6 +16,7 @@ serde_json = "1.0"
 tokio = { version = "1.48", default-features = false, features = ["macros", "net", "rt", "signal", "time"] }
 
 [dev-dependencies]
+git-policy = { path = "../git-policy", features = ["test-upstreams"] }
 tokio = { version = "1.48", default-features = false, features = ["io-util"] }
 
 [profile.release]

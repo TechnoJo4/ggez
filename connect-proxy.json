@@ -1,0 +1,7 @@
+{
+  "github.com": { "policy": "github" },
+  "api.github.com": { "policy": "github-api" },
+  "codeload.github.com": { "policy": "github-codeload" },
+  "gitlab.com": { "policy": "git" },
+  "codeberg.org": { "policy": "git" }
+}

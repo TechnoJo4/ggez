@@ -1,0 +1,100 @@
+#!/usr/bin/env python3
+"""Export guest modules from resolved compose config: generate-nix OUTPUT_DIR.
+
+Needs the public connect-proxy/ca.crt, never its signing key. For another compose
+frontend, pipe `config --format json` and pass --compose-json -.
+"""
+import argparse
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+
+
+ROOT = Path(__file__).resolve().parent
+GATEWAYS = {"guest-bridge", "inference", "read-only-http", "read-only-git", "connect-proxy"}
+
+
+def argument(service, flag):
+    command = service["command"]
+    if not isinstance(command, list) or command.count(flag) != 1:
+        raise ValueError(f"expected one {flag} in command")
+    return command[command.index(flag) + 1]
+
+
+def mounted_file(service, target):
+    mounts = [v for v in service["volumes"] if v["type"] == "bind" and v["target"] == target]
+    if len(mounts) != 1:
+        raise ValueError(f"expected one bind mount for {target}")
+    source = Path(mounts[0]["source"])
+    return source if source.is_absolute() else ROOT / source
+
+
+def export(compose, output):
+    # Read everything before writing; missing config/CA leaves the export untouched.
+    deployments, files = {}, {"vsock-guest.nix": (ROOT / "vsock-guest.nix").read_bytes()}
+    tcp_ports = set()
+    vsock_listeners = set()
+    for name, service in compose["services"].items():
+        build = service.get("build", {})
+        dockerfile = build.get("dockerfile", "Dockerfile")
+        gateway = Path(dockerfile).parent.name if "/" in dockerfile else Path(build.get("context", "")).name
+        if gateway not in GATEWAYS:
+            continue
+        if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+            raise ValueError(f"invalid service name: {name}")
+        if gateway == "guest-bridge":
+            port = int(argument(service, "--guest-listener-vsock-port"))
+            tcp = int(service["labels"]["ggez.guest-tcp-port"])
+            if port in vsock_listeners:
+                raise ValueError(f"duplicate guest vsock listener port: {port}")
+            vsock_listeners.add(port)
+        else:
+            flag = {"inference": "--host-inference-listener-uds", "read-only-http": "--host-gateway-listener-uds", "read-only-git": "--host-git-listener-uds", "connect-proxy": "--host-proxy-listener-uds"}[gateway]
+            port = int(argument(service, flag).rsplit("_", 1)[1])
+            tcp = int(service.get("labels", {}).get("ggez.guest-tcp-port", port))
+            if tcp in tcp_ports:
+                raise ValueError(f"duplicate guest TCP adapter port: {tcp}")
+            tcp_ports.add(tcp)
+        if not 1 <= tcp <= 65535 or not 1 <= port < 2**32 - 1:
+            raise ValueError(f"invalid guest port for {name}")
+        deployment = {"name": name, "vsockPort": port, "guestTcpPort": tcp, "gateway": gateway}
+        if gateway == "read-only-git":
+            config = argument(service, "--host-upstreams-config")
+            deployment["upstreams"] = json.loads(mounted_file(service, config).read_text())
+        if gateway == "connect-proxy":
+            ca = argument(service, "--host-ca-certificate")
+            files["connect-proxy/ca.crt"] = mounted_file(service, ca).read_bytes()
+        deployments[name] = deployment
+        files[f"{gateway}/guest.nix"] = (ROOT / gateway / "guest.nix").read_bytes()
+    imports = "\n".join(f'    (import ./{d["gateway"]}/guest.nix deployment."{name}")' for name, d in deployments.items())
+    files["deployment.json"] = (json.dumps(deployments, indent=2, sort_keys=True) + "\n").encode()
+    files["guest.nix"] = ('let\n  deployment = builtins.fromJSON (builtins.readFile ./deployment.json);\nin {\n  imports = [\n' + imports + '\n  ];\n}\n').encode()
+    output = output.resolve()
+    # An export must never overwrite repository source or any of its parents.
+    if output == ROOT or output in ROOT.parents or any(output == ROOT / name or ROOT / name in output.parents for name in GATEWAYS | {"git-policy"}):
+        raise ValueError("output must be a separate directory")
+    for relative, content in files.items():
+        destination = output / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(content)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--compose-json", type=Path, help="resolved compose JSON, or - for stdin")
+    args = parser.parse_args()
+    if args.compose_json:
+        compose = json.load(sys.stdin) if str(args.compose_json) == "-" else json.loads(args.compose_json.read_text())
+    else:
+        compose = json.loads(subprocess.check_output(["docker", "compose", "-f", str(ROOT / "compose.yaml"), "config", "--format", "json"]))
+    export(compose, args.output)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
+        sys.exit(f"generate-nix: {error}")

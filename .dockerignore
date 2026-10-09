@@ -1,0 +1,9 @@
+**/target
+**/*.nix
+.git
+.env*
+**/*.key
+**/*.pem
+**/*.sock*
+inference-keys
+guest-nixos

@@ -34,6 +34,8 @@ x-guest-bridge: &guest-bridge
 services:
   ssh-bridge:
     <<: *guest-bridge
+    labels:
+      ggez.guest-tcp-port: "22"
     command:
       - --guest-listener-vsock-port
       - "22"
@@ -44,6 +46,8 @@ services:
 
   tame-rpc-bridge:
     <<: *guest-bridge
+    labels:
+      ggez.guest-tcp-port: "6702"
     command:
       - --guest-listener-vsock-port
       - "6702"
@@ -87,7 +91,9 @@ services:
 
   read-only-git:
     <<: *gateway
-    build: ./read-only-git
+    build:
+      context: .
+      dockerfile: read-only-git/Dockerfile
     command:
       - --host-git-listener-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5003"
@@ -96,3 +102,23 @@ services:
     volumes:
       - *firecracker-sockets
       - ./read-only-git.json:/config.json:ro
+
+  connect-proxy:
+    <<: *gateway
+    build:
+      context: .
+      dockerfile: connect-proxy/Dockerfile
+    command:
+      - --host-proxy-listener-uds
+      - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5004"
+      - --host-upstreams-config
+      - /config.json
+      - --host-ca-certificate
+      - /ca.crt
+      - --host-ca-signing-key
+      - /ca.key
+    volumes:
+      - *firecracker-sockets
+      - ./connect-proxy.json:/config.json:ro
+      - ./connect-proxy/ca.crt:/ca.crt:ro
+      - ./connect-proxy/ca.key:/ca.key:ro

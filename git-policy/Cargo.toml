@@ -1,0 +1,14 @@
+[package]
+name = "git-policy"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+# Only test fixtures can substitute plaintext origins.
+test-upstreams = []
+
+[dependencies]
+bytes = "1.10"
+hyper = { version = "1.7", default-features = false }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }

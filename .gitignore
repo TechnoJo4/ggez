@@ -2,6 +2,8 @@
 .env
 .env.*
 /inference-keys/
+/guest-nixos/
+**/__pycache__/
 *.pem
 *.key
 *.sock
