@@ -21,6 +21,8 @@ use tokio::{
     time::timeout,
 };
 
+mod providers;
+
 struct Recorded {
     path: String,
     headers: HeaderMap,

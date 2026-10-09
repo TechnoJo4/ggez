@@ -27,6 +27,14 @@ fn positive(value: Option<&Value>) -> Check {
 fn optional<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a Value> {
     object.get(key).filter(|v| !v.is_null())
 }
+fn optional_strings(object: &Map<String, Value>, keys: &[&str]) -> Check {
+    for key in keys {
+        if let Some(value) = optional(object, key) {
+            string(Some(value))?;
+        }
+    }
+    Ok(())
+}
 fn each(value: &Value, check: impl Fn(&Value) -> Check) -> Check {
     for item in value.as_array().ok_or(())? {
         check(item)?;
@@ -79,7 +87,17 @@ fn schema(value: &Value) -> Check {
 }
 
 fn thinking(value: &Value) -> Check {
-    let object = fields(value, &["type", "budget_tokens", "display"])?;
+    let object = fields(
+        value,
+        &[
+            "type",
+            "budget_tokens",
+            "display",
+            "block_binding",
+            "clear_thinking",
+        ],
+    )?;
+    scalars(object, &[], &["clear_thinking"])?;
     if !matches!(
         object.get("type").and_then(Value::as_str),
         Some("enabled" | "disabled" | "adaptive")
@@ -89,8 +107,49 @@ fn thinking(value: &Value) -> Check {
     if let Some(value) = optional(object, "budget_tokens") {
         positive(Some(value))?;
     }
-    if let Some(value) = optional(object, "display") {
-        string(Some(value))?;
+    optional_strings(object, &["display"])?;
+    if let Some(value) = optional(object, "block_binding") {
+        // Host anthropic-beta must include thinking-binding-controls-2026-08-01.
+        let binding = fields(value, &["prefix_mismatch_behavior"])?;
+        if optional(binding, "prefix_mismatch_behavior")
+            .is_some_and(|v| !matches!(v.as_str(), Some("drop_block" | "error")))
+        {
+            return Err(());
+        }
+    }
+    Ok(())
+}
+
+fn reasoning(value: &Value) -> Check {
+    let object = fields(
+        value,
+        &["effort", "max_tokens", "exclude", "enabled", "context"],
+    )?;
+    scalars(object, &[], &["exclude", "enabled"])?;
+    optional_strings(object, &["effort", "context"])?;
+    if let Some(value) = optional(object, "max_tokens") {
+        positive(Some(value))?;
+    }
+    Ok(())
+}
+
+fn reasoning_detail(value: &Value) -> Check {
+    let allowed: &[&str] = match value.get("type").and_then(Value::as_str) {
+        Some("reasoning.summary") => &["type", "id", "format", "index", "summary"],
+        Some("reasoning.text") => &["type", "id", "format", "index", "text", "signature"],
+        Some("reasoning.encrypted") => &["type", "id", "format", "index", "data"],
+        _ => return Err(()),
+    };
+    let object = fields(value, allowed)?;
+    scalars(object, &["index"], &[])?;
+    optional_strings(
+        object,
+        &["id", "format", "summary", "text", "signature", "data"],
+    )?;
+    match object["type"].as_str() {
+        Some("reasoning.summary") => string(object.get("summary"))?,
+        Some("reasoning.encrypted") => string(object.get("data"))?,
+        _ => {}
     }
     Ok(())
 }
@@ -147,7 +206,21 @@ pub(crate) fn completions(value: &Value) -> Check {
             "seed",
             "response_format",
             "reasoning_effort",
+            "reasoning",
+            "include_reasoning",
             "thinking",
+            "top_k",
+            "min_p",
+            "top_a",
+            "repetition_penalty",
+            "logit_bias",
+            "logprobs",
+            "top_logprobs",
+            "user",
+            "verbosity",
+            "chat_template_args",
+            "usage",
+            "cache_control",
             "store",
         ],
     )?;
@@ -159,9 +232,31 @@ pub(crate) fn completions(value: &Value) -> Check {
             "frequency_penalty",
             "presence_penalty",
             "seed",
+            "top_k",
+            "min_p",
+            "top_a",
+            "repetition_penalty",
+            "top_logprobs",
         ],
-        &["parallel_tool_calls"],
+        &["parallel_tool_calls", "include_reasoning", "logprobs"],
     )?;
+    cached(object)?;
+    if let Some(value) = optional(object, "usage") {
+        let usage = fields(value, &["include"])?;
+        scalars(usage, &[], &["include"])?;
+    }
+    if let Some(value) = optional(object, "logit_bias")
+        && !value
+            .as_object()
+            .is_some_and(|o| o.values().all(Value::is_number))
+    {
+        return Err(());
+    }
+    optional_strings(object, &["user", "verbosity", "reasoning_effort"])?;
+    if let Some(value) = optional(object, "chat_template_args") {
+        let template = fields(value, &["enable_thinking"])?;
+        scalars(template, &[], &["enable_thinking"])?;
+    }
     if ["store", "stream"]
         .iter()
         .any(|key| optional(object, key).is_some_and(|v| v != &Value::Bool(false)))
@@ -176,11 +271,11 @@ pub(crate) fn completions(value: &Value) -> Check {
     if let Some(value) = optional(object, "stop") {
         strings(value)?;
     }
-    if let Some(value) = optional(object, "reasoning_effort") {
-        string(Some(value))?;
-    }
     if let Some(value) = optional(object, "thinking") {
         thinking(value)?;
+    }
+    if let Some(value) = optional(object, "reasoning") {
+        reasoning(value)?;
     }
     let messages = object
         .get("messages")
@@ -197,6 +292,9 @@ pub(crate) fn completions(value: &Value) -> Check {
                 "tool_call_id",
                 "tool_calls",
                 "reasoning_content",
+                "reasoning",
+                "reasoning_details",
+                "cache_control",
             ],
         )?;
         if !matches!(
@@ -205,10 +303,13 @@ pub(crate) fn completions(value: &Value) -> Check {
         ) {
             return Err(());
         }
-        for key in ["name", "tool_call_id", "reasoning_content"] {
-            if let Some(value) = optional(message, key) {
-                string(Some(value))?;
-            }
+        cached(message)?;
+        optional_strings(
+            message,
+            &["name", "tool_call_id", "reasoning_content", "reasoning"],
+        )?;
+        if let Some(value) = optional(message, "reasoning_details") {
+            each(value, reasoning_detail)?;
         }
         if let Some(content) = optional(message, "content")
             && !content.is_string()
@@ -216,11 +317,13 @@ pub(crate) fn completions(value: &Value) -> Check {
             each(content, |part| {
                 match part.get("type").and_then(Value::as_str) {
                     Some("text") => {
-                        let part = fields(part, &["type", "text"])?;
+                        let part = fields(part, &["type", "text", "cache_control"])?;
+                        cached(part)?;
                         string(part.get("text"))
                     }
                     Some("image_url") => {
-                        let part = fields(part, &["type", "image_url"])?;
+                        let part = fields(part, &["type", "image_url", "cache_control"])?;
+                        cached(part)?;
                         let image = fields(part.get("image_url").ok_or(())?, &["url", "detail"])?;
                         if optional(image, "detail")
                             .is_some_and(|v| !matches!(v.as_str(), Some("auto" | "low" | "high")))
@@ -262,9 +365,7 @@ pub(crate) fn completions(value: &Value) -> Check {
                 &["name", "description", "parameters", "strict"],
             )?;
             string(function.get("name"))?;
-            if let Some(value) = optional(function, "description") {
-                string(Some(value))?;
-            }
+            optional_strings(function, &["description"])?;
             scalars(function, &[], &["strict"])?;
             if let Some(value) = optional(function, "parameters") {
                 schema(value)?;
@@ -291,9 +392,7 @@ pub(crate) fn completions(value: &Value) -> Check {
                     &["name", "description", "schema", "strict"],
                 )?;
                 string(json.get("name"))?;
-                if let Some(value) = optional(json, "description") {
-                    string(Some(value))?;
-                }
+                optional_strings(json, &["description"])?;
                 scalars(json, &[], &["strict"])?;
                 schema(json.get("schema").ok_or(())?)?;
             }
@@ -437,9 +536,7 @@ pub(crate) fn messages(value: &Value) -> Check {
                 return Err(());
             }
             string(tool.get("name"))?;
-            if let Some(value) = optional(tool, "description") {
-                string(Some(value))?;
-            }
+            optional_strings(tool, &["description"])?;
             scalars(tool, &[], &["strict"])?;
             schema(tool.get("input_schema").ok_or(())?)?;
             cached(tool)
@@ -456,9 +553,7 @@ pub(crate) fn messages(value: &Value) -> Check {
     }
     if let Some(output) = optional(object, "output_config") {
         let output = fields(output, &["effort", "format"])?;
-        if let Some(value) = optional(output, "effort") {
-            string(Some(value))?;
-        }
+        optional_strings(output, &["effort"])?;
         if let Some(format) = optional(output, "format") {
             let format = fields(format, &["type", "schema"])?;
             if format.get("type").and_then(Value::as_str) != Some("json_schema") {

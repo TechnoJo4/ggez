@@ -1,3 +1,5 @@
+# connect proxy
+
 from the repo root, create the CA below; `ca.crt` is exported to the guest and `ca.key` stays on the host (ignored by git); set `GATEWAY_UID/GID` to match compose if overriding the defaults, including through `.env`.
 
 ```sh
