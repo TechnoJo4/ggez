@@ -1,0 +1,18 @@
+[package]
+name = "guest-bridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tokio = { version = "1.48", default-features = false, features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.48", features = ["test-util"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
