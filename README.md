@@ -1,6 +1,4 @@
-# ggez
-
-small static host-side gateways for an offline nixos firecracker guest. human review surface comes first.
+# gateways for ez
 
 | codebase | role |
 | --- | --- |
@@ -9,14 +7,16 @@ small static host-side gateways for an offline nixos firecracker guest. human re
 | [inference](inference/) | guest -> host: one inference policy with named upstream routes |
 | [read-only-git](read-only-git/) | guest -> host: named Git upstreams, clone/fetch only |
 
-each folder owns its code, tests, dependencies, and dockerfile. build with that folder as the context. dockerfiles run Linux tests and produce non-root `FROM scratch` images using a pinned rust + musl builder.
-
-`--help` defines each binary's arguments. endpoint arguments identify whose socket/port they describe and its purpose; bare `listen-port` / `listen-uds` names are banned. listener directories must be writable by the container UID (65532 by default). existing socket paths are never replaced.
-
-inference's registry schema lives in [config.rs](inference/src/config.rs). endpoint URLs, per-upstream model whitelists, host key files, and explicitly forwarded guest headers are configured there. completions and messages retain their own JSON wire formats; streaming requests are rejected. newline keepalives start after successful upstream headers, before the complete JSON body. upstream keys handle budgets; 429 and Retry-After pass through without gateway retries or rate limiting.
+## deployment guidelines
 
 blind outbound forwarding is only eligible for entirely read-only upstreams. otherwise expose reviewed read operations through a protocol-aware gateway.
 
-git's host registry is a JSON object mapping names to HTTPS base URLs ending in `/`. guest rewrites need the same trailing slash: `url."http://gateway/github/".insteadOf = "https://github.com/"`. only upload-pack discovery and negotiation reach upstream; receive-pack is rejected locally.
+## development guidelines
+
+review surface and code clarity are of the utmost importance.
+
+the only people who'll use this are me and you, and we will both read the code. document only when it can't go or isn't clear in the code. documentation should never duplicate deployment configuration -- "examples" will only confuse both of us when they inevitably drift.
+
+bare names like `listen-port` / `listen-uds` are banned from configuration: it's very easy to fall into a situation where it's unclear what is listening and on what, argument names should fully identify whose socket/port they describe.
 
 gateway-specific files stay with their gateway; shared files belong at the root. code and tests are the primary documentation.

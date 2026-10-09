@@ -8,8 +8,8 @@ use std::{collections::HashSet, ffi::OsString, fs::File, io::Read, path::PathBuf
 pub const HELP: &str = "read-only-git
   --host-git-listener-uds PATH            listener Firecracker forwards guest requests to
   --host-git-socket-mode OCTAL            socket permissions (default 600)
-  --host-upstreams-config PATH           JSON object: upstream name -> HTTPS base URL
-  --max-connections N                    concurrent requests (default 64)
+  --host-upstreams-config PATH            JSON object: upstream name -> HTTPS base URL
+  --max-connections N                     concurrent requests (default 64)
   --max-request-body-bytes N              negotiation memory bound (default 8388608)
   --request-timeout-seconds N             entire request including pack (default 3600)
 

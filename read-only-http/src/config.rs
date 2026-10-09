@@ -4,11 +4,11 @@ use std::{collections::HashSet, ffi::OsString, path::PathBuf, time::Duration};
 pub const HELP: &str = "read-only-http
   --host-gateway-listener-uds PATH        listener Firecracker forwards guest requests to
   --host-gateway-socket-mode OCTAL        socket permissions (default 600)
-  --upstream-origin HTTPS_ORIGIN         fixed upstream; no path or credentials
-  --read-path-pattern PATTERN            allowed path; repeatable, required
-  --read-query-key KEY                   allowed query key; repeatable, none by default
-  --max-connections N                    concurrent requests (default 64)
-  --request-timeout-seconds N            entire request including body (default 3600)
+  --upstream-origin HTTPS_ORIGIN          fixed upstream; no path or credentials
+  --read-path-pattern PATTERN             allowed path; repeatable, required
+  --read-query-key KEY                    allowed query key; repeatable, none by default
+  --max-connections N                     concurrent requests (default 64)
+  --request-timeout-seconds N             entire request including body (default 3600)
 
 guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 patterns match the entire path; '*' matches inside one segment, never across '/'.
