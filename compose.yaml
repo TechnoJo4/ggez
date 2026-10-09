@@ -36,7 +36,7 @@ services:
     <<: *guest-bridge
     command:
       - --guest-listener-vsock-port
-      - "2222"
+      - "22"
       - --host-firecracker-vsock-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}"
       - --host-bridge-listener-uds
