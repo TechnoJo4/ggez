@@ -25,7 +25,7 @@ x-bridge-sockets: &bridge-sockets
 x-guest-bridge: &guest-bridge
   # Set ggez.guest-tcp-port only to generate a guest vsock -> TCP adapter.
   <<: *gateway
-  image: ggez/guest-bridge:local
+  image: ggez-guest-bridge
   build:
     context: .
     dockerfile: guest-bridge/Dockerfile
