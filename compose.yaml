@@ -108,7 +108,7 @@ services:
 
 secrets:
   opencode_go_key:
-    file: ./keys/opencode_go_key
+    file: ./secrets/opencode_go_key
   deepseek_key:
-    file: ./keys/deepseek_key
+    file: ./secrets/deepseek_key
 
