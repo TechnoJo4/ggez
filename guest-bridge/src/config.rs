@@ -2,13 +2,14 @@ use std::{collections::HashSet, ffi::OsString, path::PathBuf, time::Duration};
 
 pub const HELP: &str = "guest-bridge
   --guest-listener-vsock-port PORT       port the guest accepts vsock connections on
-  --host-firecracker-vsock-uds PATH      existing host socket owned by firecracker
-  --host-bridge-listener-uds PATH        host socket this bridge creates for clients
+  --host-firecracker-vsock-uds PATH      Firecracker's base UDS, without a _PORT suffix
+  --host-bridge-listener-uds PATH        host client listener bridged to the guest
   --host-bridge-socket-mode OCTAL        socket permissions (default 600)
   --max-connections N                    concurrent sessions (default 64)
   --handshake-timeout-seconds N          connect + CONNECT/OK deadline (default 10)
   --idle-timeout-seconds N               no traffic in either direction (default 3600)
 
+host -> guest: dial Firecracker's base UDS and send CONNECT PORT.
 the listener path must not exist; its parent directory must already exist.
 SIGINT/SIGTERM close sessions and remove the bridge's own socket.";
 

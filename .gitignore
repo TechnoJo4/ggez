@@ -1,6 +1,7 @@
 **/target/
 .env
 .env.*
+/inference-keys/
 *.pem
 *.key
 *.sock

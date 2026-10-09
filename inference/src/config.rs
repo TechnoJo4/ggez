@@ -19,7 +19,7 @@ use std::{
 };
 
 pub const HELP: &str = "inference
-  --host-inference-listener-uds PATH     host socket this gateway creates
+  --host-inference-listener-uds PATH     listener Firecracker forwards guest requests to
   --host-inference-socket-mode OCTAL     socket permissions (default 600)
   --host-upstreams-config PATH           JSON registry; see config.rs for its schema
   --max-connections N                    concurrent requests (default 16)
@@ -27,6 +27,7 @@ pub const HELP: &str = "inference
   --max-response-body-bytes N            response memory bound (default 16777216)
   --request-timeout-seconds N            request + response deadline (default 3600)
 
+guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 routes: /NAME/v1/chat/completions and /NAME/v1/messages, when configured.
 models and endpoints are required config; keys are read from host-only files.
 no gateway rate limiting; upstream 429 and Retry-After are forwarded.

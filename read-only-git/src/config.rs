@@ -6,13 +6,14 @@ use crate::{
 use std::{collections::HashSet, ffi::OsString, fs::File, io::Read, path::PathBuf, time::Duration};
 
 pub const HELP: &str = "read-only-git
-  --host-git-listener-uds PATH            host socket this gateway creates
+  --host-git-listener-uds PATH            listener Firecracker forwards guest requests to
   --host-git-socket-mode OCTAL            socket permissions (default 600)
   --host-upstreams-config PATH           JSON object: upstream name -> HTTPS base URL
   --max-connections N                    concurrent requests (default 64)
   --max-request-body-bytes N              negotiation memory bound (default 8388608)
   --request-timeout-seconds N             entire request including pack (default 3600)
 
+guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 base URLs end in '/'. guest repository URLs start with /NAME/.
 only GET info/refs?service=git-upload-pack and POST git-upload-pack are admitted.
 redirects stay within the original upstream base and the same read operation.

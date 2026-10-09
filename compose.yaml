@@ -1,0 +1,98 @@
+# FIRECRACKER_VSOCK_UDS_PATH is the full host path to Firecracker's uds_path;
+# FIRECRACKER_VSOCK_UDS_DIR is its parent directory. HOST_BRIDGE_UDS_DIR holds
+# the SSH and tame RPC client sockets. These directories must already exist.
+# Use GATEWAY_UID/GID matching Firecracker and the host clients (sockets are 600).
+# Mount directories, so socket creation/recreation is visible across processes.
+x-gateway: &gateway
+  user: "${GATEWAY_UID:-65532}:${GATEWAY_GID:-65532}"
+  read_only: true
+
+x-firecracker-sockets: &firecracker-sockets
+  type: bind
+  source: "${FIRECRACKER_VSOCK_UDS_DIR:?set Firecracker's host socket directory}"
+  target: "${FIRECRACKER_VSOCK_UDS_DIR:?set Firecracker's host socket directory}"
+  bind:
+    create_host_path: false
+
+x-bridge-sockets: &bridge-sockets
+  type: bind
+  source: "${HOST_BRIDGE_UDS_DIR:?set the host client socket directory}"
+  target: "${HOST_BRIDGE_UDS_DIR:?set the host client socket directory}"
+  bind:
+    create_host_path: false
+
+x-guest-bridge: &guest-bridge
+  <<: *gateway
+  image: ggez/guest-bridge:local
+  build: ./guest-bridge
+  network_mode: none
+  volumes:
+    - <<: *firecracker-sockets
+      read_only: true
+    - *bridge-sockets
+
+services:
+  ssh-bridge:
+    <<: *guest-bridge
+    command:
+      - --guest-listener-vsock-port
+      - "2222"
+      - --host-firecracker-vsock-uds
+      - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}"
+      - --host-bridge-listener-uds
+      - "${HOST_BRIDGE_UDS_DIR}/ssh.sock"
+
+  tame-rpc-bridge:
+    <<: *guest-bridge
+    command:
+      - --guest-listener-vsock-port
+      - "6702"
+      - --host-firecracker-vsock-uds
+      - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}"
+      - --host-bridge-listener-uds
+      - "${HOST_BRIDGE_UDS_DIR}/tame-rpc.sock"
+
+  inference:
+    <<: *gateway
+    build: ./inference
+    command:
+      - --host-inference-listener-uds
+      - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5001"
+      - --host-upstreams-config
+      - /config.json
+    volumes:
+      - *firecracker-sockets
+      - ./inference.json:/config.json:ro
+      # key_file paths in inference.json refer to /keys/*.
+      - ./inference-keys:/keys:ro
+
+  nix-cache:
+    <<: *gateway
+    build: ./read-only-http
+    command:
+      - --host-gateway-listener-uds
+      - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5002"
+      - --upstream-origin
+      - https://cache.nixos.org
+      - --read-path-pattern
+      - /nix-cache-info
+      - --read-path-pattern
+      - "/*.narinfo"
+      - --read-path-pattern
+      - /nar/*
+      - --read-query-key
+      - sha256
+    volumes:
+      - *firecracker-sockets
+
+  read-only-git:
+    <<: *gateway
+    build: ./read-only-git
+    command:
+      - --host-git-listener-uds
+      - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5003"
+      - --host-upstreams-config
+      - /config.json
+    volumes:
+      - *firecracker-sockets
+      - ./read-only-git.json:/config.json:ro
