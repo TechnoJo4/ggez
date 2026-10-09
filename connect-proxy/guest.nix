@@ -16,6 +16,8 @@ in {
   systemd.services.nix-daemon.environment = fetchEnvironment;
   # Source builders use nixpkgs' cacert rather than the guest's /etc trust bundle.
   nix.settings = {
+    # Keep local aliases; the global registry is outside the allowed fetch routes.
+    flake-registry = "";
     extra-sandbox-paths = [ config.security.pki.caBundle ];
   } // lib.optionalAttrs (deployment.nixSubstituters != []) {
     substituters = lib.mkForce deployment.nixSubstituters;
