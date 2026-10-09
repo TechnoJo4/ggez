@@ -3,7 +3,7 @@
 /host-runtime/Cargo.lock
 .env
 .env.*
-/inference-keys/
+/secrets/
 /guest-nixos/
 **/__pycache__/
 *.pem

@@ -1,0 +1,31 @@
+{
+  "upstreams": {
+    "opencode-go": {
+      "completions": {
+        "url": "https://opencode.ai/zen/go/v1/chat/completions",
+        "authentication": {
+          "kind": "bearer",
+          "key_file": "/run/secrets/opencode_go_key"
+        },
+        "guest_headers": ["x-opencode-session"]
+      },
+      "messages": {
+        "url": "https://opencode.ai/zen/go/v1/messages",
+        "authentication": {
+          "kind": "api-key",
+          "key_file": "/run/secrets/opencode_go_key"
+        },
+        "guest_headers": ["x-opencode-session"]
+      }
+    },
+    "deepseek": {
+      "messages": {
+        "url": "https://api.deepseek.com/anthropic/v1/messages",
+        "authentication": {
+          "kind": "bearer",
+          "key_file": "/run/secrets/deepseek_key"
+        }
+      }
+    }
+  }
+}

@@ -4,7 +4,10 @@
   "codeberg": "https://codeberg.org/",
   "tangled": {
     "url": "https://tangled.org/",
-    "redirect_bases": ["https://knot1.tangled.sh/"]
+    "redirect_bases": [
+      "https://knot1.tangled.sh/",
+      "https://knot.gaze.systems/"
+    ]
   },
   "freedesktop": "https://gitlab.freedesktop.org/",
   "gnome": "https://gitlab.gnome.org/",

@@ -18,7 +18,7 @@ sudo chown "${GATEWAY_UID:-65532}:${GATEWAY_GID:-65532}" connect-proxy/ca.key
 
 ## development guidelines
 
-this gateway is a last-resort option for when it is _necessary_ to support existing tools which cannot take custom upstream URLs; avoid stuffing capabilities into it.
+this gateway is a "last-resort" option to support existing tools; avoid stuffing capabilities into it. capabilities should be strictly read-only.
 
 each policy/capability supported by this gateway MUST be listed below with the reason behind its inclusion.
 
@@ -31,6 +31,6 @@ specifically:
 - `forgejo`: nixpkgs' Codeberg/Gitea/Forgejo fetchers download archives without Git.
 - `gitlab`: Nix's `gitlab:` and nixpkgs' GitLab fetchers use the HTTP API.
 - `sourcehut`: Nix's `sourcehut:` and nixpkgs' SourceHut fetchers use HTTP refs/archives.
-- `nix-cache`: consolidates Nix cache transport here to remove a separate gateway and reduce review surface.
+- `nix-cache`: Nix cache transport consolidated here to avoid a separate gateway.
 - `pypi`, `pypi-files`: pip follows package index links to a separate artifact host; CONNECT preserves those URLs.
 - `cargo-index`, `cargo-files`: Cargo's sparse index specifies a separate artifact host; CONNECT preserves its download URLs.

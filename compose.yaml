@@ -71,8 +71,9 @@ services:
     volumes:
       - *firecracker-sockets
       - ./inference.json:/config.json:ro
-      # key_file paths in inference.json refer to /keys/*.
-      - ./inference-keys:/keys:ro
+    secrets:
+      - opencode_go_key
+      - deepseek_key
 
   read-only-git:
     <<: *gateway
@@ -107,3 +108,10 @@ services:
       - ./connect-proxy.json:/config.json:ro
       - ./connect-proxy/ca.crt:/ca.crt:ro
       - ./connect-proxy/ca.key:/ca.key:ro
+
+secrets:
+  opencode_go_key:
+    file: ./keys/opencode_go_key
+  deepseek_key:
+    file: ./keys/deepseek_key
+
