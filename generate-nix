@@ -102,10 +102,13 @@ def export(compose, output):
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    global ROOT
+    parser = argparse.ArgumentParser(prog="generate-nix", description=__doc__)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--checkout", type=Path, default=ROOT, help="checkout containing Compose, configs and guest modules (default: script directory)")
     parser.add_argument("--compose-json", type=Path, help="Compose config JSON, or - for stdin")
     args = parser.parse_args()
+    ROOT = args.checkout.resolve()
     if args.compose_json:
         compose = json.load(sys.stdin) if str(args.compose_json) == "-" else json.loads(args.compose_json.read_text())
     else:

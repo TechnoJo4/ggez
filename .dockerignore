@@ -1,6 +1,7 @@
 **/target
 **/__pycache__
 **/*.nix
+flake.lock
 .git
 .env*
 **/*.key

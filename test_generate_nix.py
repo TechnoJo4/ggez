@@ -3,6 +3,8 @@ import importlib.util
 import copy
 import json
 import os
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -91,6 +93,17 @@ class ExportTests(unittest.TestCase):
         with self.assertRaises(OSError):
             generator.export(self.compose, self.output)
         self.assertFalse(self.output.exists())
+
+    def test_packaged_script_reads_the_requested_checkout(self):
+        packaged = self.root / "store-bin"
+        packaged.mkdir()
+        script = packaged / "generate-nix"
+        script.write_bytes((SOURCE / "generate-nix").read_bytes())
+        compose = self.root / "compose.json"
+        compose.write_text(json.dumps(self.compose))
+        subprocess.run([sys.executable, str(script), "--checkout", str(self.root), str(self.output), "--compose-json", str(compose)], cwd=packaged, check=True, capture_output=True)
+        self.assertEqual(json.loads((self.output / "deployment.json").read_text())["git"]["upstreams"], self.upstreams)
+        self.assertEqual((self.output / "connect-proxy/ca.crt").read_text(), "public certificate")
 
     def test_source_directories_and_duplicate_adapter_ports_are_rejected(self):
         for target in [self.root, self.root / "read-only-git", self.root / "connect-proxy/subdir", self.root / "host-runtime/subdir"]:

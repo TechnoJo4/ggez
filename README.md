@@ -13,7 +13,7 @@ gateways for a sandboxed agent without a network interface, with access control 
 
 upon request, this repository will be git pulled (through the ssh guest-bridge!), reviewed by a human, then re-deployed.
 
-in the guest's checkout, run `python3 ./generate-nix /etc/nixos/gateways` (with permission to write there). generation needs Python, the Compose CLI (`pkgs.docker-compose`), the Git and CONNECT registries and public CA in the checkout; it needs no Docker daemon, host `.env` or keys. add `./gateways/guest.nix` to that system's `nixosSystem.modules` in `/etc/nixos/flake.nix` (or `imports` in `configuration.nix`), then rebuild as usual. if `/etc/nixos` is a Git flake, add the exported files to Git before rebuilding.
+after a re-deploy, run `nix run . -- /etc/nixos/gateways` (ensuring `./gateways/guest.nix` is part of `nixosSystem.modules`) to update your system with support for new capabilities.
 
 ## development guidelines
 
