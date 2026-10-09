@@ -1,7 +1,8 @@
 # FIRECRACKER_VSOCK_UDS_PATH is the full host path to Firecracker's uds_path;
 # FIRECRACKER_VSOCK_UDS_DIR is its parent directory. HOST_BRIDGE_UDS_DIR holds
 # the SSH and tame RPC client sockets. These directories must already exist.
-# Use GATEWAY_UID/GID matching Firecracker and the host clients (sockets are 600).
+# Use GATEWAY_UID/GID matching Firecracker (outbound gateway sockets are 600).
+# Bridge sockets are 660; host clients need that group and directory traversal.
 # Mount directories, so socket creation/recreation is visible across processes.
 x-gateway: &gateway
   user: "${GATEWAY_UID:-65532}:${GATEWAY_GID:-65532}"

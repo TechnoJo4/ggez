@@ -95,7 +95,7 @@ async fn real_uds_round_trip_and_connection_limit() {
     assert_eq!(&greeting, b"hello\0");
     let meta = fs::metadata(fixture.root.join("bridge.sock")).unwrap();
     assert!(meta.file_type().is_socket());
-    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+    assert_eq!(meta.permissions().mode() & 0o777, 0o660);
 
     let mut excess = UnixStream::connect(fixture.root.join("bridge.sock"))
         .await

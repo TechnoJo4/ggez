@@ -4,7 +4,7 @@ pub const HELP: &str = "guest-bridge
   --guest-listener-vsock-port PORT       port the guest accepts vsock connections on
   --host-firecracker-vsock-uds PATH      Firecracker's base UDS, without a _PORT suffix
   --host-bridge-listener-uds PATH        host client listener bridged to the guest
-  --host-bridge-socket-mode OCTAL        socket permissions (default 600)
+  --host-bridge-socket-mode OCTAL        socket permissions (default 660)
   --max-connections N                    concurrent sessions (default 64)
   --handshake-timeout-seconds N          connect + CONNECT/OK deadline (default 10)
   --idle-timeout-seconds N               no traffic in either direction (default 3600)
@@ -31,7 +31,7 @@ impl Config {
         let mut port = None;
         let mut firecracker_socket = None;
         let mut bridge_socket = None;
-        let mut socket_mode = 0o600;
+        let mut socket_mode = 0o660;
         let mut max_connections = 64;
         let mut handshake_timeout = Duration::from_secs(10);
         let mut idle_timeout = Duration::from_secs(3600);
