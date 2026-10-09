@@ -2,9 +2,11 @@ import importlib.machinery
 import importlib.util
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 SOURCE = Path(__file__).resolve().parent
@@ -54,6 +56,29 @@ class ExportTests(unittest.TestCase):
         (self.root / "git.json").write_text(json.dumps(self.upstreams))
         generator.export(self.compose, self.output)
         self.assertEqual(json.loads((self.output / "deployment.json").read_text())["git"]["upstreams"], self.upstreams)
+
+    @unittest.skipUnless(generator.shutil.which("docker-compose") or generator.shutil.which("docker"), "Compose CLI unavailable")
+    def test_guest_generation_needs_no_host_environment_daemon_or_secret_files(self):
+        if not generator.shutil.which("docker-compose") and generator.subprocess.call(
+            ["docker", "compose", "version"], stdout=generator.subprocess.DEVNULL, stderr=generator.subprocess.DEVNULL
+        ) != 0:
+            self.skipTest("Docker has no Compose plugin")
+        (self.root / "compose.yaml").write_bytes((SOURCE / "compose.yaml").read_bytes())
+        (self.root / "read-only-git.json").write_text(json.dumps(self.upstreams))
+        (self.root / "connect-proxy/ca.crt").write_text("public certificate")
+        environment = {key: value for key, value in os.environ.items() if not key.startswith(("FIRECRACKER_", "HOST_BRIDGE_", "GATEWAY_"))}
+        environment["DOCKER_HOST"] = "unix:///missing-docker-daemon.sock"
+        with mock.patch.dict(os.environ, environment, clear=True):
+            generator.export(generator.compose_config(), self.output)
+        deployment = json.loads((self.output / "deployment.json").read_text())
+        self.assertEqual(deployment["read-only-git"]["upstreams"], self.upstreams)
+        self.assertEqual(deployment["ssh-bridge"]["vsockPort"], 22)
+        self.assertEqual(deployment["connect-proxy"]["vsockPort"], 5004)
+        self.assertEqual(deployment["inference"]["vsockPort"], 5001)
+        self.assertEqual((self.output / "connect-proxy/ca.crt").read_text(), "public certificate")
+        self.assertFalse((self.root / ".env").exists())
+        self.assertFalse((self.root / "connect-proxy/ca.key").exists())
+        self.assertFalse((self.root / "inference.json").exists())
 
     def test_missing_public_ca_does_not_write_half_an_export(self):
         (self.root / "public-ca.crt").unlink()
