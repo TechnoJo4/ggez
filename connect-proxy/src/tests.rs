@@ -24,9 +24,12 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 
+mod cache;
 mod forges;
 #[cfg(unix)]
 mod nix;
+#[cfg(unix)]
+mod nix_cache;
 
 const REV: &str = "0123456789012345678901234567890123456789";
 
@@ -65,6 +68,7 @@ fn upstreams() -> Upstreams {
         ("gitlab.gnome.org".into(), UpstreamConfig::Gitlab {}),
         ("codeberg.org".into(), UpstreamConfig::Forgejo {}),
         ("git.sr.ht".into(), UpstreamConfig::Sourcehut {}),
+        ("cache.nixos.org".into(), UpstreamConfig::NixCache {}),
     ])
 }
 
@@ -179,6 +183,22 @@ fn forge_reads_and_redirects_have_an_explicit_operation_and_destination() {
 
 type Recorded = (String, Method, String, HeaderMap, Bytes);
 
+struct Cache {
+    narinfo_path: String,
+    narinfo: Vec<u8>,
+    nar: Vec<u8>,
+}
+
+impl Default for Cache {
+    fn default() -> Self {
+        Self {
+            narinfo_path: "/test.narinfo".into(),
+            narinfo: b"cache metadata\n".to_vec(),
+            nar: (0..100_000).map(|n| n as u8).collect(),
+        }
+    }
+}
+
 struct Origin {
     address: std::net::SocketAddr,
     requests: Arc<Mutex<Vec<Recorded>>>,
@@ -195,6 +215,10 @@ impl Drop for Origin {
 
 impl Origin {
     async fn new() -> Self {
+        Self::with_cache(Cache::default()).await
+    }
+
+    async fn with_cache(cache: Cache) -> Self {
         let (ca, key) = ca();
         let policy = Policy::new(upstreams()).unwrap();
         let acceptors = Arc::new(tls::acceptors(&ca, &key, policy.hosts()).unwrap());
@@ -202,11 +226,13 @@ impl Origin {
         let address = listener.local_addr().unwrap();
         let requests = Arc::new(Mutex::new(Vec::new()));
         let recorded = requests.clone();
+        let cache = Arc::new(cache);
         let task = tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
                 let recorded = recorded.clone();
                 let acceptors = acceptors.clone();
+                let cache = cache.clone();
                 tokio::spawn(async move {
                     let lazy = tokio_rustls::LazyConfigAcceptor::new(
                         rustls::server::Acceptor::default(),
@@ -221,6 +247,7 @@ impl Origin {
                     let service = service_fn(move |request: Request<hyper::body::Incoming>| {
                         let recorded = recorded.clone();
                         let host = host.clone();
+                        let cache = cache.clone();
                         async move {
                             let (parts, body) = request.into_parts();
                             let body = body.collect().await.unwrap().to_bytes();
@@ -229,11 +256,70 @@ impl Origin {
                                 host.clone(),
                                 parts.method.clone(),
                                 path.clone(),
-                                parts.headers,
+                                parts.headers.clone(),
                                 body,
                             ));
                             let mut response = Response::new(Full::new(Bytes::new()));
-                            if host == "api.github.com" {
+                            if host == "cache.nixos.org" {
+                                let route = parts.uri.path();
+                                let payload = match route {
+                                    "/nix-cache-info" => {
+                                        b"StoreDir: /nix/store\nWantMassQuery: 1\nPriority: 40\n"
+                                            .to_vec()
+                                    }
+                                    "/nar/archive.nar" => cache.nar.clone(),
+                                    route if route == cache.narinfo_path => cache.narinfo.clone(),
+                                    "/nar/redirect.nar" => {
+                                        *response.status_mut() = StatusCode::FOUND;
+                                        response.headers_mut().insert(
+                                            "location",
+                                            "https://cache.nixos.org/nar/archive.nar"
+                                                .parse()
+                                                .unwrap(),
+                                        );
+                                        Vec::new()
+                                    }
+                                    _ => {
+                                        *response.status_mut() = StatusCode::NOT_FOUND;
+                                        Vec::new()
+                                    }
+                                };
+                                if response.status() == StatusCode::OK {
+                                    response
+                                        .headers_mut()
+                                        .insert("etag", "\"cache-etag\"".parse().unwrap());
+                                    if parts
+                                        .headers
+                                        .get("if-none-match")
+                                        .is_some_and(|v| v == "\"cache-etag\"")
+                                    {
+                                        *response.status_mut() = StatusCode::NOT_MODIFIED;
+                                    } else {
+                                        response.headers_mut().insert(
+                                            "content-length",
+                                            payload.len().to_string().parse().unwrap(),
+                                        );
+                                        if route == "/nar/archive.nar"
+                                            && parts.headers.contains_key("range")
+                                        {
+                                            *response.status_mut() = StatusCode::PARTIAL_CONTENT;
+                                            response.headers_mut().insert(
+                                                "content-range",
+                                                format!(
+                                                    "bytes 0-{}/{}",
+                                                    payload.len() - 1,
+                                                    payload.len()
+                                                )
+                                                .parse()
+                                                .unwrap(),
+                                            );
+                                        }
+                                        if parts.method != Method::HEAD {
+                                            *response.body_mut() = Full::new(Bytes::from(payload));
+                                        }
+                                    }
+                                }
+                            } else if host == "api.github.com" {
                                 *response.body_mut() = Full::new(Bytes::from(format!(
                                     r#"{{"sha":"{REV}","commit":{{"tree":{{"sha":"{REV}"}}}}}}"#
                                 )));

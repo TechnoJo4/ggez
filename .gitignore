@@ -1,4 +1,6 @@
 **/target/
+/git-policy/Cargo.lock
+/host-runtime/Cargo.lock
 .env
 .env.*
 /inference-keys/

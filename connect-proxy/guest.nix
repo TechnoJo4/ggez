@@ -1,5 +1,5 @@
 deployment:
-{ config, ... }:
+{ config, lib, ... }:
 let
   proxy = "http://127.0.0.1:${toString deployment.guestTcpPort}";
   fetchEnvironment = {
@@ -13,5 +13,9 @@ in {
   environment.variables = fetchEnvironment;
   systemd.services.nix-daemon.environment = fetchEnvironment;
   # Source builders use nixpkgs' cacert rather than the guest's /etc trust bundle.
-  nix.settings.extra-sandbox-paths = [ config.security.pki.caBundle ];
+  nix.settings = {
+    extra-sandbox-paths = [ config.security.pki.caBundle ];
+  } // lib.optionalAttrs (deployment.nixSubstituters != []) {
+    substituters = lib.mkForce deployment.nixSubstituters;
+  };
 }

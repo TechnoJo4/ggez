@@ -31,3 +31,4 @@ specifically:
 - `forgejo`: nixpkgs' Codeberg/Gitea/Forgejo fetchers download archives without Git.
 - `gitlab`: Nix's `gitlab:` and nixpkgs' GitLab fetchers use the HTTP API.
 - `sourcehut`: Nix's `sourcehut:` and nixpkgs' SourceHut fetchers use HTTP refs/archives.
+- `nix-cache`: consolidates Nix cache transport here to remove a separate gateway and reduce review surface.

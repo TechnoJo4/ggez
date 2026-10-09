@@ -6,5 +6,6 @@
   "gitlab.freedesktop.org": { "policy": "gitlab" },
   "gitlab.gnome.org": { "policy": "gitlab" },
   "codeberg.org": { "policy": "forgejo" },
-  "git.sr.ht": { "policy": "sourcehut" }
+  "git.sr.ht": { "policy": "sourcehut" },
+  "cache.nixos.org": { "policy": "nix-cache" }
 }

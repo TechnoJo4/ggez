@@ -3,6 +3,7 @@ mod github;
 mod github_api;
 mod github_codeload;
 mod gitlab;
+mod nix_cache;
 mod sourcehut;
 
 use git_policy::{AuthorizedRead as GitRead, GitPolicy, clean_segment};
@@ -20,6 +21,7 @@ pub enum UpstreamConfig {
     GithubCodeload {},
     Forgejo {},
     Gitlab {},
+    NixCache {},
     Sourcehut {},
 }
 
@@ -43,6 +45,7 @@ impl UpstreamConfig {
             Self::GithubCodeload {} => github_codeload::authorize(uri),
             Self::Forgejo {} => forgejo::authorize(uri),
             Self::Gitlab {} => gitlab::authorize(uri),
+            Self::NixCache {} => nix_cache::authorize(uri),
             Self::Sourcehut {} => sourcehut::authorize(uri),
         }
     }
@@ -55,7 +58,7 @@ impl UpstreamConfig {
             Self::Forgejo {} => forgejo::redirects_to(host, next, next_host),
             Self::Gitlab {} => gitlab::redirects_to(host, next, next_host),
             Self::Sourcehut {} => sourcehut::redirects_to(host, next, next_host),
-            Self::Git {} => false,
+            Self::Git {} | Self::NixCache {} => false,
         }
     }
 }
@@ -73,6 +76,7 @@ pub(crate) struct Policy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ReadOperation {
+    Cache,
     Lookup {
         accept: &'static str,
     },
@@ -90,6 +94,7 @@ pub(crate) enum AuthorizedRequest {
 }
 
 pub(crate) struct AuthorizedHttpRead {
+    method: Method,
     url: Url,
     headers: HeaderMap,
     kind: UpstreamConfig,
@@ -184,7 +189,9 @@ impl Policy {
         {
             return Ok(AuthorizedRequest::Git(read));
         }
-        if method != Method::GET {
+        if method != Method::GET
+            && !(method == Method::HEAD && upstream.kind == (UpstreamConfig::NixCache {}))
+        {
             return Err(StatusCode::FORBIDDEN);
         }
         if !body_empty
@@ -213,6 +220,13 @@ impl Policy {
                 forwarded.append(name, value.clone());
             }
         }
+        if upstream.kind == (UpstreamConfig::NixCache {}) {
+            for name in ["if-match", "if-unmodified-since"] {
+                for value in headers.get_all(name) {
+                    forwarded.append(name, value.clone());
+                }
+            }
+        }
         forwarded.insert("accept-encoding", "identity".parse().unwrap());
         if let ReadOperation::Lookup { accept } = &operation {
             forwarded.insert("accept", accept.parse().unwrap());
@@ -220,6 +234,7 @@ impl Policy {
         let url =
             Url::parse(&format!("https://{host}{uri}")).map_err(|_| StatusCode::BAD_REQUEST)?;
         Ok(AuthorizedRequest::Http(AuthorizedHttpRead {
+            method: method.clone(),
             url,
             headers: forwarded,
             kind: upstream.kind,
@@ -229,6 +244,10 @@ impl Policy {
 }
 
 impl AuthorizedHttpRead {
+    pub fn method(&self) -> &Method {
+        &self.method
+    }
+
     pub fn url(&self) -> &Url {
         &self.url
     }
@@ -253,7 +272,7 @@ impl AuthorizedHttpRead {
         };
         let uri = route.parse().map_err(|_| ())?;
         let AuthorizedRequest::Http(next) = policy
-            .authorize(host, &Method::GET, &uri, &self.headers, true)
+            .authorize(host, &self.method, &uri, &self.headers, true)
             .map_err(|_| ())?
         else {
             return Err(());

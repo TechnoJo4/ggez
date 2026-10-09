@@ -5,7 +5,6 @@ gateways for a sandboxed agent without a network interface, with access control 
 | codebase | role |
 | --- | --- |
 | [guest-bridge](guest-bridge/) | host -> guest: firecracker handshake and byte copying |
-| [read-only-http](read-only-http/) | guest -> host: approved reads from a fixed HTTP origin |
 | [inference](inference/) | guest -> host: one inference policy with named upstream routes |
 | [read-only-git](read-only-git/) | guest -> host: named Git upstreams, clone/fetch only |
 | [connect-proxy](connect-proxy/) | guest -> host: TLS termination and explicit read policies for HTTPS clients |
@@ -14,7 +13,7 @@ gateways for a sandboxed agent without a network interface, with access control 
 
 upon request, this repository will be git pulled (through the ssh guest-bridge!), reviewed by a human, then re-deployed.
 
-in the guest's checkout, run `python3 ./generate-nix /etc/nixos/gateways` (with permission to write there). generation needs Python, the Compose CLI (`pkgs.docker-compose`), the Git registry and public CA in the checkout; it needs no Docker daemon, host `.env` or keys. add `./gateways/guest.nix` to that system's `nixosSystem.modules` in `/etc/nixos/flake.nix` (or `imports` in `configuration.nix`), then rebuild as usual. if `/etc/nixos` is a Git flake, add the exported files to Git before rebuilding.
+in the guest's checkout, run `python3 ./generate-nix /etc/nixos/gateways` (with permission to write there). generation needs Python, the Compose CLI (`pkgs.docker-compose`), the Git and CONNECT registries and public CA in the checkout; it needs no Docker daemon, host `.env` or keys. add `./gateways/guest.nix` to that system's `nixosSystem.modules` in `/etc/nixos/flake.nix` (or `imports` in `configuration.nix`), then rebuild as usual. if `/etc/nixos` is a Git flake, add the exported files to Git before rebuilding.
 
 ## development guidelines
 

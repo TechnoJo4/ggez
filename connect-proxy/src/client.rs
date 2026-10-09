@@ -48,12 +48,14 @@ impl Client {
         for hop in 0..=3 {
             let response = self
                 .http
-                .get(read.url().clone())
+                .request(read.method().clone(), read.url().clone())
                 .headers(read.headers().clone())
                 .send()
                 .await
                 .map_err(|_| io::Error::other("upstream request failed"))?;
-            if !response.status().is_redirection() {
+            if !response.status().is_redirection()
+                || response.status() == reqwest::StatusCode::NOT_MODIFIED
+            {
                 return Ok(response);
             }
             if hop == 3 || !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {

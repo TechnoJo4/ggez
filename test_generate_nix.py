@@ -28,11 +28,13 @@ class ExportTests(unittest.TestCase):
             (self.root / name / "guest.nix").write_bytes((SOURCE / name / "guest.nix").read_bytes())
         self.upstreams = {"forge": "https://forge.example/group/"}
         (self.root / "git.json").write_text(json.dumps(self.upstreams))
+        self.proxy_upstreams = {"cache.example": {"policy": "nix-cache"}, "forge.example": {"policy": "git"}}
+        (self.root / "proxy.json").write_text(json.dumps(self.proxy_upstreams))
         (self.root / "public-ca.crt").write_text("public certificate")
         (self.root / "private-ca.key").write_text("DO NOT EXPORT")
         self.compose = {"services": {
             "git": {"build": {"context": ".", "dockerfile": "read-only-git/Dockerfile"}, "command": ["--host-git-listener-uds", "/run/changed.sock_9003", "--host-upstreams-config", "/registry.json"], "volumes": [{"type": "bind", "source": "git.json", "target": "/registry.json"}]},
-            "proxy": {"build": {"context": ".", "dockerfile": "connect-proxy/Dockerfile"}, "command": ["--host-proxy-listener-uds", "/run/changed.sock_9004", "--host-ca-certificate", "/root.crt"], "volumes": [{"type": "bind", "source": "public-ca.crt", "target": "/root.crt"}, {"type": "bind", "source": "private-ca.key", "target": "/ca.key"}]},
+            "proxy": {"build": {"context": ".", "dockerfile": "connect-proxy/Dockerfile"}, "command": ["--host-proxy-listener-uds", "/run/changed.sock_9004", "--host-ca-certificate", "/root.crt", "--host-upstreams-config", "/registry.json"], "volumes": [{"type": "bind", "source": "public-ca.crt", "target": "/root.crt"}, {"type": "bind", "source": "private-ca.key", "target": "/ca.key"}, {"type": "bind", "source": "proxy.json", "target": "/registry.json"}]},
             "ssh": {"build": {"context": "./guest-bridge", "dockerfile": "Dockerfile"}, "command": ["--guest-listener-vsock-port", "2222"], "labels": {"ggez.guest-tcp-port": "22"}},
         }}
 
@@ -47,6 +49,7 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(deployment["git"]["vsockPort"], 9003)
         self.assertEqual(deployment["ssh"]["guestTcpPort"], 22)
         self.assertEqual(deployment["ssh"]["vsockPort"], 2222)
+        self.assertEqual(deployment["proxy"]["nixSubstituters"], ["https://cache.example"])
         self.assertEqual((self.output / "connect-proxy/ca.crt").read_text(), "public certificate")
         all_content = b"".join(p.read_bytes() for p in self.output.rglob("*") if p.is_file())
         self.assertNotIn(b"DO NOT EXPORT", all_content)
@@ -65,6 +68,7 @@ class ExportTests(unittest.TestCase):
             self.skipTest("Docker has no Compose plugin")
         (self.root / "compose.yaml").write_bytes((SOURCE / "compose.yaml").read_bytes())
         (self.root / "read-only-git.json").write_text(json.dumps(self.upstreams))
+        (self.root / "connect-proxy.json").write_bytes((SOURCE / "connect-proxy.json").read_bytes())
         (self.root / "connect-proxy/ca.crt").write_text("public certificate")
         environment = {key: value for key, value in os.environ.items() if not key.startswith(("FIRECRACKER_", "HOST_BRIDGE_", "GATEWAY_"))}
         environment["DOCKER_HOST"] = "unix:///missing-docker-daemon.sock"
@@ -75,6 +79,8 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(deployment["ssh-bridge"]["vsockPort"], 22)
         self.assertEqual(deployment["connect-proxy"]["vsockPort"], 5004)
         self.assertEqual(deployment["inference"]["vsockPort"], 5001)
+        self.assertEqual(deployment["connect-proxy"]["nixSubstituters"], ["https://cache.nixos.org"])
+        self.assertNotIn("nix-cache", deployment)
         self.assertEqual((self.output / "connect-proxy/ca.crt").read_text(), "public certificate")
         self.assertFalse((self.root / ".env").exists())
         self.assertFalse((self.root / "connect-proxy/ca.key").exists())
@@ -103,25 +109,15 @@ class ExportTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid guest port"):
             generator.export(self.compose, self.output)
 
-    def test_http_image_reuse_only_configures_explicit_nix_substituters(self):
-        self.compose["services"].update({
-            "nix-cache": {"build": {"context": ".", "dockerfile": "read-only-http/Dockerfile"}, "command": ["--host-gateway-listener-uds", "/run/changed.sock_9002"], "labels": {"ggez.guest-role": "nix-substituter"}},
-            "downloads": {"build": {"context": ".", "dockerfile": "read-only-http/Dockerfile"}, "command": ["--host-gateway-listener-uds", "/run/changed.sock_9005"]},
-        })
+    def test_only_nix_cache_policies_configure_substituters_and_track_registry(self):
+        self.proxy_upstreams["another-cache.example"] = {"policy": "nix-cache"}
+        (self.root / "proxy.json").write_text(json.dumps(self.proxy_upstreams))
         generator.export(self.compose, self.output)
         deployment = json.loads((self.output / "deployment.json").read_text())
-        self.assertTrue(deployment["nix-cache"]["nixSubstituter"])
-        self.assertNotIn("nixSubstituter", deployment["downloads"])
-        self.assertEqual(deployment["downloads"]["guestTcpPort"], 9005)
-        self.assertEqual((self.output / "guest.nix").read_text().count("import ./read-only-http/guest.nix"), 2)
-
-    def test_invalid_guest_roles_leave_export_untouched(self):
-        for gateway, role in [("inference", "nix-substituter"), ("read-only-http", "unknown")]:
-            with self.subTest(gateway=gateway, role=role):
-                self.compose["services"]["wrong-role"] = {"build": {"context": ".", "dockerfile": f"{gateway}/Dockerfile"}, "labels": {"ggez.guest-role": role}}
-                with self.assertRaisesRegex(ValueError, "invalid guest role"):
-                    generator.export(self.compose, self.output)
-                self.assertFalse(self.output.exists())
+        self.assertEqual(deployment["proxy"]["nixSubstituters"], ["https://another-cache.example", "https://cache.example"])
+        (self.root / "proxy.json").write_text(json.dumps({"forge.example": {"policy": "git"}}))
+        generator.export(self.compose, self.output)
+        self.assertEqual(json.loads((self.output / "deployment.json").read_text())["proxy"]["nixSubstituters"], [])
 
     def test_second_connect_proxy_cannot_replace_exported_trust(self):
         generator.export(self.compose, self.output)

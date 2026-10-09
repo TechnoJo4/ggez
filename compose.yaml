@@ -74,29 +74,6 @@ services:
       # key_file paths in inference.json refer to /keys/*.
       - ./inference-keys:/keys:ro
 
-  nix-cache:
-    <<: *gateway
-    labels:
-      ggez.guest-role: nix-substituter
-    build:
-      context: .
-      dockerfile: read-only-http/Dockerfile
-    command:
-      - --host-gateway-listener-uds
-      - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5002"
-      - --upstream-origin
-      - https://cache.nixos.org
-      - --read-path-pattern
-      - /nix-cache-info
-      - --read-path-pattern
-      - "/*.narinfo"
-      - --read-path-pattern
-      - /nar/*
-      - --read-query-key
-      - sha256
-    volumes:
-      - *firecracker-sockets
-
   read-only-git:
     <<: *gateway
     build:
