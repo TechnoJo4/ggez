@@ -2,8 +2,9 @@ use std::{
     fs,
     future::Future,
     io,
-    os::unix::fs::{MetadataExt, PermissionsExt},
-    path::PathBuf,
+    os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
+    path::{Path, PathBuf},
+    time::Duration,
 };
 use tokio::{
     net::{UnixListener, UnixStream},
@@ -25,13 +26,47 @@ struct SocketFile {
 
 impl Drop for SocketFile {
     fn drop(&mut self) {
-        if let Ok(meta) = fs::symlink_metadata(&self.path)
+        if let Ok(_lock) = lock_parent(&self.path)
+            && let Ok(meta) = fs::symlink_metadata(&self.path)
             && meta.dev() == self.device
             && meta.ino() == self.inode
         {
             let _ = fs::remove_file(&self.path);
         }
     }
+}
+
+fn lock_parent(path: &Path) -> io::Result<fs::File> {
+    // Serialize pathname changes across gateways without leaving lockfiles.
+    let directory = fs::File::open(path.parent().unwrap_or(Path::new(".")))?;
+    directory.lock()?;
+    Ok(directory)
+}
+
+async fn bind(path: &Path) -> io::Result<UnixListener> {
+    let _lock = lock_parent(path)?;
+    let error = match UnixListener::bind(path) {
+        Ok(listener) => return Ok(listener),
+        Err(error) if error.kind() == io::ErrorKind::AddrInUse => error,
+        Err(error) => return Err(error),
+    };
+    let meta = fs::symlink_metadata(path)?;
+    // Only ECONNREFUSED proves there is no listener; permissions and a full
+    // backlog must not cause us to take over an active socket.
+    if !meta.file_type().is_socket()
+        || !matches!(
+            tokio::time::timeout(Duration::from_secs(1), UnixStream::connect(path)).await,
+            Ok(Err(error)) if error.kind() == io::ErrorKind::ConnectionRefused
+        )
+    {
+        return Err(error);
+    }
+    let current = fs::symlink_metadata(path)?;
+    if current.dev() != meta.dev() || current.ino() != meta.ino() {
+        return Err(error);
+    }
+    fs::remove_file(path)?;
+    UnixListener::bind(path)
 }
 
 pub fn run<F, Fut>(name: &'static str, config: Listener, handle: F) -> io::Result<()>
@@ -43,8 +78,7 @@ where
         .enable_all()
         .build()?
         .block_on(async {
-            // Binding refuses every pre-existing pathname, including stale sockets.
-            let listener = UnixListener::bind(&config.path)?;
+            let listener = bind(&config.path).await?;
             let meta = fs::symlink_metadata(&config.path)?;
             let _socket_file = SocketFile {
                 path: config.path,

@@ -33,7 +33,8 @@ endpoints are required; models is an optional whitelist (omitted allows all).
 keys are read from host-only files.
 no gateway rate limiting; upstream 429 and Retry-After are forwarded.
 JSON responses only; stream: true is rejected. newlines keep response bodies alive.
-listener path must not already exist. SIGINT/SIGTERM close requests and unlink it.";
+stale listener sockets are replaced; active sockets and other files are refused.
+SIGINT/SIGTERM close requests and unlink the listener socket.";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]

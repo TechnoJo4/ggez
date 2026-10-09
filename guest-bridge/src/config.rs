@@ -10,7 +10,8 @@ pub const HELP: &str = "guest-bridge
   --idle-timeout-seconds N               no traffic in either direction (default 3600)
 
 host -> guest: dial Firecracker's base UDS and send CONNECT PORT.
-the listener path must not exist; its parent directory must already exist.
+stale listener sockets are replaced; active sockets and other files are refused.
+the listener's parent directory must already exist.
 SIGINT/SIGTERM close sessions and remove the bridge's own socket.";
 
 #[derive(Clone, Debug)]

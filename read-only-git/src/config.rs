@@ -14,7 +14,8 @@ guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 base URLs end in '/'. guest repository URLs start with /NAME/.
 only GET info/refs?service=git-upload-pack and POST git-upload-pack are admitted.
 redirects stay within the upstream's configured bases and the same read operation.
-listener path must not exist. SIGINT/SIGTERM close requests and unlink it.";
+stale listener sockets are replaced; active sockets and other files are refused.
+SIGINT/SIGTERM close requests and unlink the listener socket.";
 
 pub struct Config {
     pub socket: PathBuf,

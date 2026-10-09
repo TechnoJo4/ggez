@@ -29,7 +29,8 @@ policies: git; github, forgejo, gitlab, sourcehut (Git + forge reads);
           github-api, github-codeload (forge reads only); nix-cache (GET/HEAD cache reads).
           pypi, pypi-files; cargo-index, cargo-files (GET/HEAD package reads).
 leaf keys live in memory; certificates last up to one year, capped by CA expiry.
-listener path must not exist. SIGINT/SIGTERM close sessions and unlink it.";
+stale listener sockets are replaced; active sockets and other files are refused.
+SIGINT/SIGTERM close sessions and unlink the listener socket.";
 
 pub struct Config {
     pub socket: PathBuf,
