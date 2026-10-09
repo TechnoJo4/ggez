@@ -104,8 +104,8 @@ services:
     volumes:
       - *firecracker-sockets
       - ./connect-proxy.json:/config.json:ro
-      - ./connect-proxy/ca.crt:/ca.crt:ro
-      - ./connect-proxy/ca.key:/ca.key:ro
+      - /mnt/mid/ez/ca.crt:/ca.crt:ro
+      - /mnt/mid/ez/ca.key:/ca.key:ro
 
 secrets:
   opencode_go_key:
