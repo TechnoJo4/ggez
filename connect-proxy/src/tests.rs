@@ -13,6 +13,7 @@ use hyper_util::rt::TokioIo;
 use rcgen::{BasicConstraints, CertificateParams, IsCa, KeyPair, KeyUsagePurpose};
 use rustls::{ClientConfig, RootCertStore, pki_types::ServerName};
 use std::{
+    collections::HashMap,
     convert::Infallible,
     sync::{Arc, Mutex},
     time::Duration,
@@ -30,6 +31,9 @@ mod forges;
 mod nix;
 #[cfg(unix)]
 mod nix_cache;
+mod package_policy;
+#[cfg(unix)]
+mod packages;
 
 const REV: &str = "0123456789012345678901234567890123456789";
 
@@ -69,6 +73,13 @@ fn upstreams() -> Upstreams {
         ("codeberg.org".into(), UpstreamConfig::Forgejo {}),
         ("git.sr.ht".into(), UpstreamConfig::Sourcehut {}),
         ("cache.nixos.org".into(), UpstreamConfig::NixCache {}),
+        ("pypi.org".into(), UpstreamConfig::Pypi {}),
+        (
+            "files.pythonhosted.org".into(),
+            UpstreamConfig::PypiFiles {},
+        ),
+        ("index.crates.io".into(), UpstreamConfig::CargoIndex {}),
+        ("static.crates.io".into(), UpstreamConfig::CargoFiles {}),
     ])
 }
 
@@ -219,6 +230,17 @@ impl Origin {
     }
 
     async fn with_cache(cache: Cache) -> Self {
+        Self::with_fixtures(cache, HashMap::new()).await
+    }
+
+    async fn with_routes(routes: HashMap<(String, String), (String, Vec<u8>)>) -> Self {
+        Self::with_fixtures(Cache::default(), routes).await
+    }
+
+    async fn with_fixtures(
+        cache: Cache,
+        routes: HashMap<(String, String), (String, Vec<u8>)>,
+    ) -> Self {
         let (ca, key) = ca();
         let policy = Policy::new(upstreams()).unwrap();
         let acceptors = Arc::new(tls::acceptors(&ca, &key, policy.hosts()).unwrap());
@@ -227,12 +249,14 @@ impl Origin {
         let requests = Arc::new(Mutex::new(Vec::new()));
         let recorded = requests.clone();
         let cache = Arc::new(cache);
+        let routes = Arc::new(routes);
         let task = tokio::spawn(async move {
             loop {
                 let (stream, _) = listener.accept().await.unwrap();
                 let recorded = recorded.clone();
                 let acceptors = acceptors.clone();
                 let cache = cache.clone();
+                let routes = routes.clone();
                 tokio::spawn(async move {
                     let lazy = tokio_rustls::LazyConfigAcceptor::new(
                         rustls::server::Acceptor::default(),
@@ -248,6 +272,7 @@ impl Origin {
                         let recorded = recorded.clone();
                         let host = host.clone();
                         let cache = cache.clone();
+                        let routes = routes.clone();
                         async move {
                             let (parts, body) = request.into_parts();
                             let body = body.collect().await.unwrap().to_bytes();
@@ -260,7 +285,29 @@ impl Origin {
                                 body,
                             ));
                             let mut response = Response::new(Full::new(Bytes::new()));
-                            if host == "cache.nixos.org" {
+                            if let Some((content_type, payload)) =
+                                routes.get(&(host.clone(), path.clone()))
+                            {
+                                response
+                                    .headers_mut()
+                                    .insert("content-type", content_type.parse().unwrap());
+                                response.headers_mut().insert(
+                                    "content-length",
+                                    payload.len().to_string().parse().unwrap(),
+                                );
+                                if parts.method != Method::HEAD {
+                                    *response.body_mut() =
+                                        Full::new(Bytes::copy_from_slice(payload));
+                                }
+                            } else if matches!(
+                                host.as_str(),
+                                "pypi.org"
+                                    | "files.pythonhosted.org"
+                                    | "index.crates.io"
+                                    | "static.crates.io"
+                            ) {
+                                *response.status_mut() = StatusCode::NOT_FOUND;
+                            } else if host == "cache.nixos.org" {
                                 let route = parts.uri.path();
                                 let payload = match route {
                                     "/nix-cache-info" => {

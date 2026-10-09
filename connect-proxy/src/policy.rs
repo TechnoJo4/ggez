@@ -1,9 +1,13 @@
+mod cargo_files;
+mod cargo_index;
 mod forgejo;
 mod github;
 mod github_api;
 mod github_codeload;
 mod gitlab;
 mod nix_cache;
+mod pypi;
+mod pypi_files;
 mod sourcehut;
 
 use git_policy::{AuthorizedRead as GitRead, GitPolicy, clean_segment};
@@ -15,6 +19,8 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(tag = "policy", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum UpstreamConfig {
+    CargoIndex {},
+    CargoFiles {},
     Git {},
     Github {},
     GithubApi {},
@@ -22,10 +28,23 @@ pub enum UpstreamConfig {
     Forgejo {},
     Gitlab {},
     NixCache {},
+    Pypi {},
+    PypiFiles {},
     Sourcehut {},
 }
 
 impl UpstreamConfig {
+    fn allows_head(self) -> bool {
+        matches!(
+            self,
+            Self::NixCache {}
+                | Self::Pypi {}
+                | Self::PypiFiles {}
+                | Self::CargoIndex {}
+                | Self::CargoFiles {}
+        )
+    }
+
     fn allows_git(self) -> bool {
         matches!(
             self,
@@ -39,6 +58,8 @@ impl UpstreamConfig {
 
     fn read(self, uri: &Uri) -> Option<ReadOperation> {
         match self {
+            Self::CargoIndex {} => cargo_index::authorize(uri),
+            Self::CargoFiles {} => cargo_files::authorize(uri),
             Self::Git {} => None, // All Git authorization is in the shared git-policy crate.
             Self::Github {} => github::authorize(uri),
             Self::GithubApi {} => github_api::authorize(uri),
@@ -46,6 +67,8 @@ impl UpstreamConfig {
             Self::Forgejo {} => forgejo::authorize(uri),
             Self::Gitlab {} => gitlab::authorize(uri),
             Self::NixCache {} => nix_cache::authorize(uri),
+            Self::Pypi {} => pypi::authorize(uri),
+            Self::PypiFiles {} => pypi_files::authorize(uri),
             Self::Sourcehut {} => sourcehut::authorize(uri),
         }
     }
@@ -58,7 +81,12 @@ impl UpstreamConfig {
             Self::Forgejo {} => forgejo::redirects_to(host, next, next_host),
             Self::Gitlab {} => gitlab::redirects_to(host, next, next_host),
             Self::Sourcehut {} => sourcehut::redirects_to(host, next, next_host),
-            Self::Git {} | Self::NixCache {} => false,
+            Self::Git {}
+            | Self::NixCache {}
+            | Self::Pypi {}
+            | Self::PypiFiles {}
+            | Self::CargoIndex {}
+            | Self::CargoFiles {} => false,
         }
     }
 }
@@ -77,6 +105,7 @@ pub(crate) struct Policy {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ReadOperation {
     Cache,
+    PackageFile,
     Lookup {
         accept: &'static str,
     },
@@ -189,9 +218,7 @@ impl Policy {
         {
             return Ok(AuthorizedRequest::Git(read));
         }
-        if method != Method::GET
-            && !(method == Method::HEAD && upstream.kind == (UpstreamConfig::NixCache {}))
-        {
+        if method != Method::GET && !(method == Method::HEAD && upstream.kind.allows_head()) {
             return Err(StatusCode::FORBIDDEN);
         }
         if !body_empty

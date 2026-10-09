@@ -4,6 +4,8 @@ let
   proxy = "http://127.0.0.1:${toString deployment.guestTcpPort}";
   fetchEnvironment = {
     https_proxy = proxy;
+    PIP_CERT = toString config.security.pki.caBundle;
+    CARGO_HTTP_CAINFO = toString config.security.pki.caBundle;
     NIX_GIT_SSL_CAINFO = toString config.security.pki.caBundle;
     NIX_CURL_FLAGS = "--cacert ${config.security.pki.caBundle}";
   };

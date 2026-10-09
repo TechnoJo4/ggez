@@ -7,5 +7,9 @@
   "gitlab.gnome.org": { "policy": "gitlab" },
   "codeberg.org": { "policy": "forgejo" },
   "git.sr.ht": { "policy": "sourcehut" },
-  "cache.nixos.org": { "policy": "nix-cache" }
+  "cache.nixos.org": { "policy": "nix-cache" },
+  "pypi.org": { "policy": "pypi" },
+  "files.pythonhosted.org": { "policy": "pypi-files" },
+  "index.crates.io": { "policy": "cargo-index" },
+  "static.crates.io": { "policy": "cargo-files" }
 }
