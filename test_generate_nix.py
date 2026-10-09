@@ -75,7 +75,11 @@ class ExportTests(unittest.TestCase):
         environment = {key: value for key, value in os.environ.items() if not key.startswith(("FIRECRACKER_", "HOST_BRIDGE_", "GATEWAY_"))}
         environment["DOCKER_HOST"] = "unix:///missing-docker-daemon.sock"
         with mock.patch.dict(os.environ, environment, clear=True):
-            generator.export(generator.compose_config(), self.output)
+            compose = generator.compose_config()
+            for volume in compose["services"]["connect-proxy"]["volumes"]:
+                if volume["target"] == "/ca.crt":
+                    volume["source"] = "connect-proxy/ca.crt"
+            generator.export(compose, self.output)
         deployment = json.loads((self.output / "deployment.json").read_text())
         self.assertEqual(deployment["read-only-git"]["upstreams"], self.upstreams)
         self.assertNotIn("ssh-bridge", deployment)

@@ -18,7 +18,8 @@ in {
   nix.settings = {
     # Keep local aliases; the global registry is outside the allowed fetch routes.
     flake-registry = "";
-    extra-sandbox-paths = [ config.security.pki.caBundle ];
+    # A file mount would try to recreate the bundle inside a read-only store input.
+    extra-sandbox-paths = [ (builtins.dirOf config.security.pki.caBundle) ];
   } // lib.optionalAttrs (deployment.nixSubstituters != []) {
     substituters = lib.mkForce deployment.nixSubstituters;
   };
