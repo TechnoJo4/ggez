@@ -2,6 +2,7 @@ FROM docker.io/library/rust@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789
 WORKDIR /src/connect-proxy
 RUN apk add --no-cache nix
 COPY git-policy /src/git-policy
+COPY host-runtime /src/host-runtime
 COPY connect-proxy/Cargo.toml connect-proxy/Cargo.lock ./
 COPY connect-proxy/src ./src
 RUN NIX_TEST_REQUIRED=1 cargo test --locked && cargo build --release --locked

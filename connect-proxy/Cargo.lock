@@ -139,6 +139,7 @@ dependencies = [
  "flate2",
  "futures-util",
  "git-policy",
+ "host-runtime",
  "http-body-util",
  "httparse",
  "hyper",
@@ -351,6 +352,17 @@ dependencies = [
  "bytes",
  "hyper",
  "reqwest",
+]
+
+[[package]]
+name = "host-runtime"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "tokio",
 ]
 
 [[package]]

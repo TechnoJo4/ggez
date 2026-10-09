@@ -70,17 +70,7 @@ impl Policy {
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
-        if !headers
-            .get("content-type")
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|s| {
-                s.split(';')
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .eq_ignore_ascii_case("application/json")
-            })
-        {
+        if !crate::json_content_type(headers) {
             return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
         let route = self.routes.get(uri.path()).ok_or(StatusCode::NOT_FOUND)?;

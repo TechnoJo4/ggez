@@ -1,9 +1,6 @@
-use crate::{
-    client::Client,
-    policy::{Policy, Upstreams},
-    server::{Gateway, serve},
-};
+use crate::server::{Gateway, serve};
 use bytes::Bytes;
+use git_policy::{Client, Policy, Upstreams};
 use http_body_util::{BodyExt, Full};
 use hyper::{HeaderMap, Method, Response, StatusCode, server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;

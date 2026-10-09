@@ -36,6 +36,7 @@ def export(compose, output):
     deployments, files = {}, {"vsock-guest.nix": (ROOT / "vsock-guest.nix").read_bytes()}
     tcp_ports = set()
     vsock_listeners = set()
+    connect_proxy = False
     for name, service in compose["services"].items():
         build = service.get("build", {})
         dockerfile = build.get("dockerfile", "Dockerfile")
@@ -44,6 +45,13 @@ def export(compose, output):
             continue
         if not re.fullmatch(r"[a-z][a-z0-9-]*", name):
             raise ValueError(f"invalid service name: {name}")
+        role = service.get("labels", {}).get("ggez.guest-role")
+        if role is not None and (gateway != "read-only-http" or role != "nix-substituter"):
+            raise ValueError(f"invalid guest role for {name}: {role}")
+        if gateway == "connect-proxy":
+            if connect_proxy:
+                raise ValueError("only one CONNECT proxy can configure the guest HTTPS proxy")
+            connect_proxy = True
         if gateway == "guest-bridge":
             port = int(argument(service, "--guest-listener-vsock-port"))
             tcp = int(service["labels"]["ggez.guest-tcp-port"])
@@ -60,6 +68,8 @@ def export(compose, output):
         if not 1 <= tcp <= 65535 or not 1 <= port < 2**32 - 1:
             raise ValueError(f"invalid guest port for {name}")
         deployment = {"name": name, "vsockPort": port, "guestTcpPort": tcp, "gateway": gateway}
+        if role == "nix-substituter":
+            deployment["nixSubstituter"] = True
         if gateway == "read-only-git":
             config = argument(service, "--host-upstreams-config")
             deployment["upstreams"] = json.loads(mounted_file(service, config).read_text())
@@ -73,7 +83,7 @@ def export(compose, output):
     files["guest.nix"] = ('let\n  deployment = builtins.fromJSON (builtins.readFile ./deployment.json);\nin {\n  imports = [\n' + imports + '\n  ];\n}\n').encode()
     output = output.resolve()
     # An export must never overwrite repository source or any of its parents.
-    if output == ROOT or output in ROOT.parents or any(output == ROOT / name or ROOT / name in output.parents for name in GATEWAYS | {"git-policy"}):
+    if output == ROOT or output in ROOT.parents or any(output == ROOT / name or ROOT / name in output.parents for name in GATEWAYS | {"git-policy", "host-runtime"}):
         raise ValueError("output must be a separate directory")
     for relative, content in files.items():
         destination = output / relative

@@ -1,0 +1,15 @@
+[package]
+name = "host-runtime"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[features]
+http = ["dep:bytes", "dep:hyper", "dep:hyper-util", "dep:http-body-util"]
+
+[dependencies]
+tokio = { version = "1.48", default-features = false, features = ["io-util", "macros", "net", "rt", "signal", "time"] }
+bytes = { version = "1.10", optional = true }
+hyper = { version = "1.7", features = ["http1", "server"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+http-body-util = { version = "0.1", optional = true }

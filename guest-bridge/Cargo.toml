@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+host-runtime = { path = "../host-runtime" }
 tokio = { version = "1.48", default-features = false, features = ["io-util", "macros", "net", "rt", "signal", "sync", "time"] }
 
 [dev-dependencies]

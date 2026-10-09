@@ -11,7 +11,7 @@ use std::{
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf},
     sync::watch,
-    time::{Instant, sleep_until, timeout},
+    time::{Instant, sleep_until},
 };
 
 // Read only through LF. A buffered line reader could swallow the first RPC bytes.
@@ -125,7 +125,7 @@ where
 
 #[cfg(unix)]
 pub async fn connect(config: &config::Config) -> io::Result<tokio::net::UnixStream> {
-    timeout(config.handshake_timeout, async {
+    tokio::time::timeout(config.handshake_timeout, async {
         let mut stream = tokio::net::UnixStream::connect(&config.firecracker_socket).await?;
         handshake(&mut stream, config.guest_port).await?;
         Ok(stream)

@@ -9,13 +9,13 @@ pub struct Policy {
 // No public fields or Deserialize: the upstream client cannot accept unchecked input.
 pub struct AuthorizedRead {
     method: Method,
-    path_and_query: String,
+    uri: Uri,
     headers: HeaderMap,
 }
 
 impl AuthorizedRead {
-    pub(crate) fn into_parts(self) -> (Method, String, HeaderMap) {
-        (self.method, self.path_and_query, self.headers)
+    pub(crate) fn into_parts(self) -> (Method, Uri, HeaderMap) {
+        (self.method, self.uri, self.headers)
     }
 }
 
@@ -136,7 +136,7 @@ impl Policy {
         }
         Ok(AuthorizedRead {
             method: method.clone(),
-            path_and_query: uri.path_and_query().map_or("/", |p| p.as_str()).to_owned(),
+            uri: uri.clone(),
             headers: forwarded,
         })
     }

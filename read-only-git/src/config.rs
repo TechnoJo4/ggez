@@ -1,8 +1,5 @@
-use crate::{
-    client::Client,
-    policy::{Policy, Upstreams},
-    server::Gateway,
-};
+use crate::server::Gateway;
+use git_policy::{Client, Policy, Upstreams};
 use std::{collections::HashSet, ffi::OsString, fs::File, io::Read, path::PathBuf, time::Duration};
 
 pub const HELP: &str = "read-only-git

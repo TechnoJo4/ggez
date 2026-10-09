@@ -4,14 +4,11 @@ use crate::{
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
-use http_body_util::{BodyExt, Full, Limited, StreamBody, combinators::UnsyncBoxBody};
+use http_body_util::{BodyExt, Full, Limited, StreamBody};
 use hyper::{
     Request, Response, StatusCode,
     body::{Body, Frame, Incoming},
-    server::conn::http1,
-    service::service_fn,
 };
-use hyper_util::rt::{TokioIo, TokioTimer};
 use std::{collections::HashMap, convert::Infallible, io, sync::Arc, time::Duration};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio_rustls::TlsAcceptor;
@@ -23,7 +20,7 @@ pub struct Gateway {
     pub(crate) max_body: usize,
 }
 
-type ResponseBody = UnsyncBoxBody<Bytes, io::Error>;
+use host_runtime::http::ResponseBody;
 
 fn error(status: StatusCode) -> Response<ResponseBody> {
     let mut response = Response::new(
@@ -79,7 +76,7 @@ async fn handle(
     if !hosts
         .next()
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v == host || v == format!("{host}:443"))
+        .is_some_and(|v| v == host || v.strip_suffix(":443") == Some(host.as_str()))
         || hosts.next().is_some()
     {
         return Ok(error(StatusCode::BAD_REQUEST));
@@ -94,12 +91,11 @@ async fn handle(
         Ok(read) => read,
         Err(status) => return Ok(error(status)),
     };
-    let expected_type = match &authorized {
-        AuthorizedRequest::Git(read) => Some(read.operation().response_type()),
+    let git_operation = match &authorized {
+        AuthorizedRequest::Git(read) => Some(read.operation()),
         _ => None,
     };
-    let body = if matches!(&authorized, AuthorizedRequest::Git(read) if read.operation() == git_policy::Operation::UploadPack)
-    {
+    let body = if git_operation == Some(git_policy::Operation::UploadPack) {
         match Limited::new(request.into_body(), gateway.max_body)
             .collect()
             .await
@@ -123,7 +119,7 @@ async fn handle(
     if !matches!(
         status,
         StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
-    ) || expected_type.is_some() && status != StatusCode::OK
+    ) || git_operation.is_some() && status != StatusCode::OK
     {
         let mut response = error(if status.is_client_error() || status.is_server_error() {
             status
@@ -135,7 +131,7 @@ async fn handle(
         }
         return Ok(response);
     }
-    if expected_type.is_some_and(|expected| {
+    if git_operation.is_some_and(|operation| {
         !upstream
             .headers()
             .get("content-type")
@@ -145,7 +141,7 @@ async fn handle(
                     .next()
                     .unwrap_or("")
                     .trim()
-                    .eq_ignore_ascii_case(expected)
+                    .eq_ignore_ascii_case(operation.response_type())
             })
     }) {
         return Ok(error(StatusCode::BAD_GATEWAY));
@@ -217,19 +213,10 @@ where
         )
         .await
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS handshake deadline"))??;
-        let mut http = http1::Builder::new();
-        http.keep_alive(false)
-            .half_close(false)
-            .max_headers(32)
-            .max_buf_size(16384)
-            .timer(TokioTimer::new())
-            .header_read_timeout(Duration::from_secs(10));
-        http.serve_connection(
-            TokioIo::new(stream),
-            service_fn(move |request| handle(gateway.clone(), host.clone(), request)),
-        )
+        host_runtime::http::connection(stream, move |request| {
+            handle(gateway.clone(), host.clone(), request)
+        })
         .await
-        .map_err(|_| io::Error::other("proxy HTTP connection failed"))
     })
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "proxy session deadline"))?

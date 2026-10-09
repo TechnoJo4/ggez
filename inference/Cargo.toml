@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+host-runtime = { path = "../host-runtime", features = ["http"] }
 bytes = "1.10"
 http-body-util = "0.1"
 hyper = { version = "1.7", default-features = false, features = ["http1", "server"] }

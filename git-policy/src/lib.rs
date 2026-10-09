@@ -14,7 +14,7 @@ use std::{
 pub type Upstreams = BTreeMap<String, String>;
 
 pub struct Policy {
-    upstreams: HashMap<String, Arc<Url>>,
+    upstreams: HashMap<String, GitPolicy>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -46,6 +46,9 @@ pub struct AuthorizedRead {
     operation: Operation,
     headers: HeaderMap,
 }
+
+#[derive(Debug)]
+pub struct InvalidRedirect;
 
 pub fn clean_segment(segment: &str) -> bool {
     !segment.is_empty()
@@ -83,8 +86,27 @@ pub struct GitPolicy(Arc<Url>);
 
 impl GitPolicy {
     pub fn new(base: &str) -> Result<Self, String> {
-        let policy = Policy::new(Upstreams::from([("origin".into(), base.into())]))?;
-        Ok(Self(policy.upstreams["origin"].clone()))
+        let url = Url::parse(base).map_err(|_| "invalid upstream base URL")?;
+        // Check raw path too: URL parsing would otherwise normalize '..'.
+        let raw_path = base
+            .split_once("://")
+            .and_then(|(_, rest)| rest.split_once('/').map(|(_, path)| path))
+            .ok_or("upstream base URL must end in '/'")?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !base.ends_with('/')
+            || !(raw_path.is_empty()
+                || raw_path
+                    .strip_suffix('/')
+                    .is_some_and(|path| path.split('/').all(clean_segment)))
+        {
+            return Err("upstream base must be HTTPS without credentials, query, escaping, or traversal, ending in '/'".into());
+        }
+        Ok(Self(Arc::new(url)))
     }
 
     pub fn authorize(
@@ -94,23 +116,12 @@ impl GitPolicy {
         headers: &HeaderMap,
         body_empty: bool,
     ) -> Result<AuthorizedRead, StatusCode> {
-        if uri.scheme().is_some() || uri.authority().is_some() {
-            return Err(StatusCode::BAD_REQUEST);
-        }
+        validate_head(method, uri, headers)?;
         let path = uri
             .path()
             .strip_prefix(self.0.path())
             .ok_or(StatusCode::FORBIDDEN)?;
-        let rewritten: Uri = format!(
-            "/origin/{path}{}",
-            uri.query().map(|q| format!("?{q}")).unwrap_or_default()
-        )
-        .parse()
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-        let policy = Policy {
-            upstreams: HashMap::from([("origin".into(), self.0.clone())]),
-        };
-        policy.authorize(method, &rewritten, headers, body_empty)
+        self.authorize_path(method, uri, path, headers, body_empty)
     }
 }
 
@@ -124,27 +135,7 @@ impl Policy {
             if name.len() > 64 || !clean_segment(&name) {
                 return Err("invalid upstream name".into());
             }
-            let url = Url::parse(&base).map_err(|_| "invalid upstream base URL")?;
-            // Check raw path too: URL parsing would otherwise normalize '..'.
-            let raw_path = base
-                .split_once("://")
-                .and_then(|(_, rest)| rest.split_once('/').map(|(_, path)| path))
-                .ok_or("upstream base URL must end in '/'")?;
-            if url.scheme() != "https"
-                || url.host_str().is_none()
-                || !url.username().is_empty()
-                || url.password().is_some()
-                || url.query().is_some()
-                || url.fragment().is_some()
-                || !base.ends_with('/')
-                || !(raw_path.is_empty()
-                    || raw_path
-                        .strip_suffix('/')
-                        .is_some_and(|path| path.split('/').all(clean_segment)))
-            {
-                return Err("upstream base must be HTTPS without credentials, query, escaping, or traversal, ending in '/'".into());
-            }
-            bases.insert(name, Arc::new(url));
+            bases.insert(name, GitPolicy::new(&base)?);
         }
         Ok(Self { upstreams: bases })
     }
@@ -154,7 +145,12 @@ impl Policy {
         Self {
             upstreams: upstreams
                 .iter()
-                .map(|(name, url)| ((*name).to_owned(), Arc::new(Url::parse(url).unwrap())))
+                .map(|(name, url)| {
+                    (
+                        (*name).to_owned(),
+                        GitPolicy(Arc::new(Url::parse(url).unwrap())),
+                    )
+                })
                 .collect(),
         }
     }
@@ -166,34 +162,52 @@ impl Policy {
         headers: &HeaderMap,
         body_empty: bool,
     ) -> Result<AuthorizedRead, StatusCode> {
-        if method != Method::GET && method != Method::POST {
-            return Err(StatusCode::METHOD_NOT_ALLOWED);
-        }
-        if uri.scheme().is_some()
-            || uri.authority().is_some()
-            || uri.to_string().len() > 4096
-            || headers.contains_key("upgrade")
-        {
-            return Err(StatusCode::BAD_REQUEST);
-        }
-        for value in headers.get_all("connection") {
-            if !value.to_str().is_ok_and(|s| {
-                s.split(',').all(|token| {
-                    matches!(
-                        token.trim().to_ascii_lowercase().as_str(),
-                        "close" | "keep-alive"
-                    )
-                })
-            }) {
-                return Err(StatusCode::BAD_REQUEST);
-            }
-        }
+        validate_head(method, uri, headers)?;
         let (name, path) = uri
             .path()
             .strip_prefix('/')
             .and_then(|p| p.split_once('/'))
             .ok_or(StatusCode::NOT_FOUND)?;
         let base = self.upstreams.get(name).ok_or(StatusCode::NOT_FOUND)?;
+        base.authorize_path(method, uri, path, headers, body_empty)
+    }
+}
+
+fn validate_head(method: &Method, uri: &Uri, headers: &HeaderMap) -> Result<(), StatusCode> {
+    if method != Method::GET && method != Method::POST {
+        return Err(StatusCode::METHOD_NOT_ALLOWED);
+    }
+    if uri.scheme().is_some()
+        || uri.authority().is_some()
+        || uri.to_string().len() > 4096
+        || headers.contains_key("upgrade")
+    {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    for value in headers.get_all("connection") {
+        if !value.to_str().is_ok_and(|s| {
+            s.split(',').all(|token| {
+                matches!(
+                    token.trim().to_ascii_lowercase().as_str(),
+                    "close" | "keep-alive"
+                )
+            })
+        }) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+    }
+    Ok(())
+}
+
+impl GitPolicy {
+    fn authorize_path(
+        &self,
+        method: &Method,
+        uri: &Uri,
+        path: &str,
+        headers: &HeaderMap,
+        body_empty: bool,
+    ) -> Result<AuthorizedRead, StatusCode> {
         let operation = operation(method, path, uri.query())?;
         if operation == Operation::Discover
             && (!body_empty
@@ -244,11 +258,11 @@ impl Policy {
             HeaderValue::from_static(operation.response_type()),
         );
         forwarded.insert("accept-encoding", HeaderValue::from_static("identity"));
-        let mut url = (**base).clone();
-        url.set_path(&format!("{}{path}", base.path()));
+        let mut url = (*self.0).clone();
+        url.set_path(&format!("{}{path}", self.0.path()));
         url.set_query(uri.query());
         Ok(AuthorizedRead {
-            base: base.clone(),
+            base: self.0.clone(),
             url,
             operation,
             headers: forwarded,
@@ -268,8 +282,8 @@ impl AuthorizedRead {
     }
     // Follow a canonical-repository redirect only within the original base,
     // and recheck the read operation. Never expose a Location to the guest.
-    pub fn redirect(&mut self, location: &str) -> Result<(), ()> {
-        let url = self.url.join(location).map_err(|_| ())?;
+    pub fn redirect(&mut self, location: &str) -> Result<(), InvalidRedirect> {
+        let url = self.url.join(location).map_err(|_| InvalidRedirect)?;
         if url.scheme() != self.base.scheme()
             || url.host_str() != self.base.host_str()
             || url.port_or_known_default() != self.base.port_or_known_default()
@@ -277,12 +291,16 @@ impl AuthorizedRead {
             || url.password().is_some()
             || url.fragment().is_some()
         {
-            return Err(());
+            return Err(InvalidRedirect);
         }
-        let path = url.path().strip_prefix(self.base.path()).ok_or(())?;
-        if operation(&self.operation.method(), path, url.query()).map_err(|_| ())? != self.operation
+        let path = url
+            .path()
+            .strip_prefix(self.base.path())
+            .ok_or(InvalidRedirect)?;
+        if operation(&self.operation.method(), path, url.query()).map_err(|_| InvalidRedirect)?
+            != self.operation
         {
-            return Err(());
+            return Err(InvalidRedirect);
         }
         self.url = url;
         Ok(())

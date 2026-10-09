@@ -4,11 +4,19 @@ use reqwest::{Client as HttpClient, Response, redirect};
 use std::{io, time::Duration};
 
 pub(crate) struct Client {
-    pub(crate) git: git_policy::Client,
-    pub(crate) forge: HttpClient,
+    git: git_policy::Client,
+    forge: HttpClient,
 }
 
 impl Client {
+    #[cfg(test)]
+    pub fn for_test(http: HttpClient) -> Self {
+        Self {
+            git: git_policy::Client::for_test(http.clone()),
+            forge: http,
+        }
+    }
+
     pub fn new(deadline: Duration) -> Result<Self, String> {
         let forge = HttpClient::builder()
             .https_only(true)

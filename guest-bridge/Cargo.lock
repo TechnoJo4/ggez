@@ -22,6 +22,14 @@ dependencies = [
 name = "guest-bridge"
 version = "0.1.0"
 dependencies = [
+ "host-runtime",
+ "tokio",
+]
+
+[[package]]
+name = "host-runtime"
+version = "0.1.0"
+dependencies = [
  "tokio",
 ]
 

@@ -113,13 +113,10 @@ fn cached(object: &Map<String, Value>) -> Check {
     Ok(())
 }
 
-fn base64_image(url: &str) -> Check {
-    let Some((kind, data)) = url.split_once(";base64,") else {
-        return Err(());
-    };
+fn base64_image(media_type: &str, data: &str) -> Check {
     if !matches!(
-        kind,
-        "data:image/png" | "data:image/jpeg" | "data:image/gif" | "data:image/webp"
+        media_type,
+        "image/png" | "image/jpeg" | "image/gif" | "image/webp"
     ) || data.is_empty()
         || !data
             .bytes()
@@ -163,7 +160,7 @@ pub(crate) fn completions(value: &Value) -> Check {
             "presence_penalty",
             "seed",
         ],
-        &["stream", "parallel_tool_calls"],
+        &["parallel_tool_calls"],
     )?;
     if ["store", "stream"]
         .iter()
@@ -230,7 +227,12 @@ pub(crate) fn completions(value: &Value) -> Check {
                         {
                             return Err(());
                         }
-                        base64_image(image.get("url").and_then(Value::as_str).ok_or(())?)
+                        let url = image.get("url").and_then(Value::as_str).ok_or(())?;
+                        let (media_type, data) = url
+                            .strip_prefix("data:")
+                            .and_then(|url| url.split_once(";base64,"))
+                            .ok_or(())?;
+                        base64_image(media_type, data)
                     }
                     _ => Err(()),
                 }
@@ -354,11 +356,10 @@ fn blocks(value: &Value, tools: bool) -> Check {
                 if source.get("type").and_then(Value::as_str) != Some("base64") {
                     return Err(());
                 }
-                base64_image(&format!(
-                    "data:{};base64,{}",
+                base64_image(
                     source.get("media_type").and_then(Value::as_str).ok_or(())?,
-                    source.get("data").and_then(Value::as_str).ok_or(())?
-                ))
+                    source.get("data").and_then(Value::as_str).ok_or(())?,
+                )
             }
             _ => Err(()),
         }
@@ -390,7 +391,7 @@ pub(crate) fn messages(value: &Value) -> Check {
     if optional(object, "stream").is_some_and(|v| v != &Value::Bool(false)) {
         return Err(());
     }
-    scalars(object, &["temperature", "top_p", "top_k"], &["stream"])?;
+    scalars(object, &["temperature", "top_p", "top_k"], &[])?;
     cached(object)?;
     if let Some(value) = optional(object, "thinking") {
         thinking(value)?;

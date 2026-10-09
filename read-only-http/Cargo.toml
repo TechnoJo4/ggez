@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+host-runtime = { path = "../host-runtime", features = ["http"] }
 bytes = "1.10"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 http-body-util = "0.1"

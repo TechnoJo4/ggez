@@ -1,13 +1,10 @@
 use crate::{client::Client, policy::Policy};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited, combinators::UnsyncBoxBody};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
     Request, Response, StatusCode,
     body::{Body, Frame, Incoming},
-    server::conn::http1,
-    service::service_fn,
 };
-use hyper_util::rt::{TokioIo, TokioTimer};
 use std::{
     convert::Infallible,
     future::Future,
@@ -18,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-type ResponseBody = UnsyncBoxBody<Bytes, io::Error>;
+use host_runtime::http::ResponseBody;
 
 pub struct Gateway {
     pub(crate) policy: Policy,
@@ -135,24 +132,11 @@ async fn handle(
     if status.is_client_error() || status.is_server_error() {
         // Keep status/backoff semantics, without reflecting credential-bearing provider errors.
         let mut response = error(status);
-        for name in ["retry-after", "x-request-id", "request-id"] {
-            if let Some(value) = headers.get(name) {
-                response.headers_mut().insert(name, value.clone());
-            }
-        }
+        headers.remove("content-type");
+        response.headers_mut().extend(headers);
         return Ok(response);
     }
-    if !upstream
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| {
-            v.split(';')
-                .next()
-                .unwrap_or("")
-                .trim()
-                .eq_ignore_ascii_case("application/json")
-        })
+    if !crate::json_content_type(upstream.headers())
         || upstream
             .headers()
             .get("content-encoding")
@@ -174,23 +158,12 @@ pub async fn serve<S>(stream: S, gateway: Arc<Gateway>, deadline: Duration) -> i
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let mut http = http1::Builder::new();
-    http.keep_alive(false)
-        .half_close(false)
-        .max_headers(32)
-        .max_buf_size(16384)
-        .timer(TokioTimer::new())
-        .header_read_timeout(Duration::from_secs(10));
     tokio::time::timeout(
         deadline,
-        http.serve_connection(
-            TokioIo::new(stream),
-            service_fn(move |request| handle(gateway.clone(), request)),
-        ),
+        host_runtime::http::connection(stream, move |request| handle(gateway.clone(), request)),
     )
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "inference request deadline"))?
-    .map_err(|_| io::Error::other("inference HTTP connection failed"))
 }
 
 #[cfg(test)]

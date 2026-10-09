@@ -62,7 +62,7 @@ class ExportTests(unittest.TestCase):
         self.assertFalse(self.output.exists())
 
     def test_source_directories_and_duplicate_adapter_ports_are_rejected(self):
-        for target in [self.root, self.root / "read-only-git", self.root / "connect-proxy/subdir"]:
+        for target in [self.root, self.root / "read-only-git", self.root / "connect-proxy/subdir", self.root / "host-runtime/subdir"]:
             with self.assertRaises(ValueError):
                 generator.export(self.compose, target)
         self.compose["services"]["proxy"]["labels"] = {"ggez.guest-tcp-port": "9003"}
@@ -77,6 +77,38 @@ class ExportTests(unittest.TestCase):
         self.compose["services"]["ssh"]["command"][-1] = str(2**32 - 1)
         with self.assertRaisesRegex(ValueError, "invalid guest port"):
             generator.export(self.compose, self.output)
+
+    def test_http_image_reuse_only_configures_explicit_nix_substituters(self):
+        self.compose["services"].update({
+            "nix-cache": {"build": {"context": ".", "dockerfile": "read-only-http/Dockerfile"}, "command": ["--host-gateway-listener-uds", "/run/changed.sock_9002"], "labels": {"ggez.guest-role": "nix-substituter"}},
+            "downloads": {"build": {"context": ".", "dockerfile": "read-only-http/Dockerfile"}, "command": ["--host-gateway-listener-uds", "/run/changed.sock_9005"]},
+        })
+        generator.export(self.compose, self.output)
+        deployment = json.loads((self.output / "deployment.json").read_text())
+        self.assertTrue(deployment["nix-cache"]["nixSubstituter"])
+        self.assertNotIn("nixSubstituter", deployment["downloads"])
+        self.assertEqual(deployment["downloads"]["guestTcpPort"], 9005)
+        self.assertEqual((self.output / "guest.nix").read_text().count("import ./read-only-http/guest.nix"), 2)
+
+    def test_invalid_guest_roles_leave_export_untouched(self):
+        for gateway, role in [("inference", "nix-substituter"), ("read-only-http", "unknown")]:
+            with self.subTest(gateway=gateway, role=role):
+                self.compose["services"]["wrong-role"] = {"build": {"context": ".", "dockerfile": f"{gateway}/Dockerfile"}, "labels": {"ggez.guest-role": role}}
+                with self.assertRaisesRegex(ValueError, "invalid guest role"):
+                    generator.export(self.compose, self.output)
+                self.assertFalse(self.output.exists())
+
+    def test_second_connect_proxy_cannot_replace_exported_trust(self):
+        generator.export(self.compose, self.output)
+        before = {p.relative_to(self.output): p.read_bytes() for p in self.output.rglob("*") if p.is_file()}
+        (self.root / "other-ca.crt").write_text("another public CA")
+        proxy = copy.deepcopy(self.compose["services"]["proxy"])
+        proxy["command"][1] = "/run/changed.sock_9006"
+        proxy["volumes"][0]["source"] = "other-ca.crt"
+        self.compose["services"]["other-proxy"] = proxy
+        with self.assertRaisesRegex(ValueError, "only one CONNECT proxy"):
+            generator.export(self.compose, self.output)
+        self.assertEqual(before, {p.relative_to(self.output): p.read_bytes() for p in self.output.rglob("*") if p.is_file()})
 
 
 if __name__ == "__main__":

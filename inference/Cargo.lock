@@ -177,6 +177,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "host-runtime"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "tokio",
+]
+
+[[package]]
 name = "http"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -390,6 +401,7 @@ name = "inference"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "host-runtime",
  "http-body-util",
  "hyper",
  "hyper-util",

@@ -70,45 +70,24 @@ fn forge_read(kind: UpstreamConfig, path: &str) -> Option<ForgeRead> {
     if !segments.iter().all(|s| clean_segment(s)) {
         return None;
     }
-    match kind {
-        UpstreamConfig::GithubApi {}
-            if segments.len() >= 5 && segments[0] == "repos" && segments[3] == "commits" =>
-        {
-            Some(ForgeRead::Commit)
+    let (owner, repo, rev) = match (kind, segments.as_slice()) {
+        (UpstreamConfig::GithubApi {}, ["repos", _, _, "commits", _, ..]) => {
+            return Some(ForgeRead::Commit);
         }
-        UpstreamConfig::Github {} if segments.len() == 4 && segments[2] == "archive" => {
-            let rev = segments[3].strip_suffix(".tar.gz")?;
-            revision(rev).then(|| ForgeRead::Archive {
-                owner: segments[0].into(),
-                repo: segments[1].into(),
-                rev: rev.into(),
-            })
+        (UpstreamConfig::Github {}, [owner, repo, "archive", filename]) => {
+            (*owner, *repo, filename.strip_suffix(".tar.gz")?)
         }
-        UpstreamConfig::GithubApi {}
-            if segments.len() == 5
-                && segments[0] == "repos"
-                && segments[3] == "tarball"
-                && revision(segments[4]) =>
-        {
-            Some(ForgeRead::Archive {
-                owner: segments[1].into(),
-                repo: segments[2].into(),
-                rev: segments[4].into(),
-            })
+        (UpstreamConfig::GithubApi {}, ["repos", owner, repo, "tarball", rev])
+        | (UpstreamConfig::GithubCodeload {}, [owner, repo, "tar.gz" | "legacy.tar.gz", rev]) => {
+            (*owner, *repo, *rev)
         }
-        UpstreamConfig::GithubCodeload {}
-            if segments.len() == 4
-                && matches!(segments[2], "tar.gz" | "legacy.tar.gz")
-                && revision(segments[3]) =>
-        {
-            Some(ForgeRead::Archive {
-                owner: segments[0].into(),
-                repo: segments[1].into(),
-                rev: segments[3].into(),
-            })
-        }
-        _ => None,
-    }
+        _ => return None,
+    };
+    revision(rev).then(|| ForgeRead::Archive {
+        owner: owner.into(),
+        repo: repo.into(),
+        rev: rev.into(),
+    })
 }
 
 impl Policy {

@@ -1,20 +1,14 @@
-use crate::{
-    client::Client,
-    policy::{Operation, Policy},
-};
 use bytes::Bytes;
 use futures_util::StreamExt;
-use http_body_util::{BodyExt, Full, Limited, StreamBody, combinators::UnsyncBoxBody};
+use git_policy::{Client, Operation, Policy};
+use http_body_util::{BodyExt, Full, Limited, StreamBody};
 use hyper::{
     Request, Response, StatusCode,
     body::{Body, Frame, Incoming},
-    server::conn::http1,
-    service::service_fn,
 };
-use hyper_util::rt::{TokioIo, TokioTimer};
 use std::{convert::Infallible, io, sync::Arc, time::Duration};
 
-type ResponseBody = UnsyncBoxBody<Bytes, io::Error>;
+use host_runtime::http::ResponseBody;
 
 pub struct Gateway {
     pub(crate) policy: Policy,
@@ -115,21 +109,10 @@ pub async fn serve<S>(stream: S, gateway: Arc<Gateway>, deadline: Duration) -> i
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
-    let mut http = http1::Builder::new();
-    http.keep_alive(false)
-        .half_close(false)
-        .max_headers(32)
-        .max_buf_size(16384)
-        .timer(TokioTimer::new())
-        .header_read_timeout(Duration::from_secs(10));
     tokio::time::timeout(
         deadline,
-        http.serve_connection(
-            TokioIo::new(stream),
-            service_fn(move |request| handle(gateway.clone(), request)),
-        ),
+        host_runtime::http::connection(stream, move |request| handle(gateway.clone(), request)),
     )
     .await
-    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "git request deadline"))?
-    .map_err(|_| io::Error::other("git HTTP connection failed"))
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "read-only-git request deadline"))?
 }

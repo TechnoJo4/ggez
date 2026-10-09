@@ -24,7 +24,9 @@ x-bridge-sockets: &bridge-sockets
 x-guest-bridge: &guest-bridge
   <<: *gateway
   image: ggez/guest-bridge:local
-  build: ./guest-bridge
+  build:
+    context: .
+    dockerfile: guest-bridge/Dockerfile
   network_mode: none
   volumes:
     - <<: *firecracker-sockets
@@ -58,7 +60,9 @@ services:
 
   inference:
     <<: *gateway
-    build: ./inference
+    build:
+      context: .
+      dockerfile: inference/Dockerfile
     command:
       - --host-inference-listener-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5001"
@@ -72,7 +76,11 @@ services:
 
   nix-cache:
     <<: *gateway
-    build: ./read-only-http
+    labels:
+      ggez.guest-role: nix-substituter
+    build:
+      context: .
+      dockerfile: read-only-http/Dockerfile
     command:
       - --host-gateway-listener-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5002"

@@ -115,10 +115,23 @@ fn forge_reads_and_redirects_have_an_explicit_operation_and_destination() {
         )
     };
     assert!(read("api.github.com", "/repos/org/repo/commits/feature/branch").is_ok());
+    for (host, path) in [
+        ("github.com", format!("/org/repo/archive/{REV}.tar.gz")),
+        ("api.github.com", format!("/repos/org/repo/tarball/{REV}")),
+        ("codeload.github.com", format!("/org/repo/tar.gz/{REV}")),
+        (
+            "codeload.github.com",
+            format!("/org/repo/legacy.tar.gz/{REV}"),
+        ),
+    ] {
+        assert!(read(host, &path).is_ok(), "rejected {host}{path}");
+        assert!(read(host, &format!("{path}/extra")).is_err());
+    }
     assert!(read("gitlab.com", &format!("/org/repo/archive/{REV}.tar.gz")).is_err());
     for path in [
         "/user",
         "/repos/org/repo/issues",
+        "/repos/org/repo/commits",
         "/repos/org/repo/commits/HEAD?method=delete",
         "/repos/org/repo/commits/%2e%2e",
         "/repos/org/repo/commits//HEAD",
@@ -142,6 +155,8 @@ fn forge_reads_and_redirects_have_an_explicit_operation_and_destination() {
         format!("http://codeload.github.com/org/repo/tar.gz/{REV}"),
         format!("https://evil.com/org/repo/tar.gz/{REV}"),
         format!("https://codeload.github.com/other/repo/tar.gz/{REV}"),
+        "https://codeload.github.com/org/repo/tar.gz/ffffffffffffffffffffffffffffffffffffffff"
+            .into(),
         format!("https://codeload.github.com/org/repo/tar.gz/{REV}?x=1"),
         format!("https://user:secret@codeload.github.com/org/repo/tar.gz/{REV}"),
         format!("https://codeload.github.com:444/org/repo/tar.gz/{REV}"),
@@ -278,10 +293,7 @@ impl Origin {
         Arc::new(Gateway {
             acceptors: tls::acceptors(&self.ca, &self.key, policy.hosts()).unwrap(),
             policy,
-            client: Client {
-                git: git_policy::Client::for_test(http.clone()),
-                forge: http,
-            },
+            client: Client::for_test(http),
             max_body: 32,
         })
     }
@@ -386,7 +398,7 @@ async fn tls_reads_preserve_git_negotiation_and_nix_forge_downloads() {
             .unwrap();
         assert!(
             reply.starts_with(b"HTTP/1.1 200"),
-            "{}",
+            "{host}: {}",
             String::from_utf8_lossy(&reply)
         );
         assert!(!String::from_utf8_lossy(&reply).contains("host-secret"));

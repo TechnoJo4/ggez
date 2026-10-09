@@ -43,15 +43,10 @@ impl Client {
     }
 
     pub async fn fetch(&self, read: AuthorizedRead) -> io::Result<reqwest::Response> {
-        let (method, path_and_query, headers) = read.into_parts();
+        let (method, uri, headers) = read.into_parts();
         let mut url = self.origin.clone();
-        let (path, query) = path_and_query
-            .split_once('?')
-            .map_or((path_and_query.as_str(), None), |(path, query)| {
-                (path, Some(query))
-            });
-        url.set_path(path);
-        url.set_query(query);
+        url.set_path(uri.path());
+        url.set_query(uri.query());
         self.http
             .request(method, url)
             .headers(headers)
