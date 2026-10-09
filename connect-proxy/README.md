@@ -15,3 +15,19 @@ openssl req -new -x509 -sha256 -days 3650 \
 chmod 644 connect-proxy/ca.crt
 sudo chown "${GATEWAY_UID:-65532}:${GATEWAY_GID:-65532}" connect-proxy/ca.key
 ```
+
+## development guidelines
+
+this gateway is a last-resort option for when it is _necessary_ to support existing tools which cannot take custom upstream URLs; avoid stuffing capabilities into it.
+
+each policy/capability supported by this gateway MUST be listed below with the reason behind its inclusion.
+
+specifically:
+
+- `git`: nixpkgs' Git builders bypass system Git config, including our URL rewrites.
+- `github`: Nix's `github:` fetches and nixpkgs' archive fetches bypass Git.
+- `github-api`: Nix resolves GitHub refs through the commit API.
+- `github-codeload`: GitHub redirects archive downloads here.
+- `forgejo`: nixpkgs' Codeberg/Gitea/Forgejo fetchers download archives without Git.
+- `gitlab`: Nix's `gitlab:` and nixpkgs' GitLab fetchers use the HTTP API.
+- `sourcehut`: Nix's `sourcehut:` and nixpkgs' SourceHut fetchers use HTTP refs/archives.

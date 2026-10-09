@@ -1,5 +1,8 @@
 {
   "github": "https://github.com/",
   "gitlab": "https://gitlab.com/",
-  "codeberg": "https://codeberg.org/"
+  "codeberg": "https://codeberg.org/",
+  "freedesktop": "https://gitlab.freedesktop.org/",
+  "gnome": "https://gitlab.gnome.org/",
+  "sourcehut": "https://git.sr.ht/"
 }

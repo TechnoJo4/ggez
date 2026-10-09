@@ -1,16 +1,63 @@
+mod forgejo;
+mod github;
+mod github_api;
+mod github_codeload;
+mod gitlab;
+mod sourcehut;
+
 use git_policy::{AuthorizedRead as GitRead, GitPolicy, clean_segment};
 use hyper::{HeaderMap, Method, StatusCode, Uri};
 use reqwest::Url;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
 
-#[derive(Clone, Copy, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
 #[serde(tag = "policy", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum UpstreamConfig {
     Git {},
     Github {},
     GithubApi {},
     GithubCodeload {},
+    Forgejo {},
+    Gitlab {},
+    Sourcehut {},
+}
+
+impl UpstreamConfig {
+    fn allows_git(self) -> bool {
+        matches!(
+            self,
+            Self::Git {}
+                | Self::Github {}
+                | Self::Forgejo {}
+                | Self::Gitlab {}
+                | Self::Sourcehut {}
+        )
+    }
+
+    fn read(self, uri: &Uri) -> Option<ForgeRead> {
+        match self {
+            Self::Git {} => None, // All Git authorization is in the shared git-policy crate.
+            Self::Github {} => github::authorize(uri),
+            Self::GithubApi {} => github_api::authorize(uri),
+            Self::GithubCodeload {} => github_codeload::authorize(uri),
+            Self::Forgejo {} => forgejo::authorize(uri),
+            Self::Gitlab {} => gitlab::authorize(uri),
+            Self::Sourcehut {} => sourcehut::authorize(uri),
+        }
+    }
+
+    fn redirects_to(self, host: &str, next: Self, next_host: &str) -> bool {
+        match self {
+            Self::Github {} | Self::GithubApi {} | Self::GithubCodeload {} => {
+                github::redirects_to(next)
+            }
+            Self::Forgejo {} => forgejo::redirects_to(host, next, next_host),
+            Self::Gitlab {} => gitlab::redirects_to(host, next, next_host),
+            Self::Sourcehut {} => sourcehut::redirects_to(host, next, next_host),
+            Self::Git {} => false,
+        }
+    }
 }
 
 pub type Upstreams = BTreeMap<String, UpstreamConfig>;
@@ -26,9 +73,11 @@ pub(crate) struct Policy {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ForgeRead {
-    Commit,
+    Lookup {
+        accept: &'static str,
+    },
     Archive {
-        owner: String,
+        kind: UpstreamConfig,
         repo: String,
         rev: String,
     },
@@ -43,6 +92,7 @@ pub(crate) enum AuthorizedRequest {
 pub(crate) struct AuthorizedForgeRead {
     url: Url,
     headers: HeaderMap,
+    kind: UpstreamConfig,
     operation: ForgeRead,
 }
 
@@ -65,27 +115,30 @@ fn revision(rev: &str) -> bool {
     rev.len() == 40 && rev.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-fn forge_read(kind: UpstreamConfig, path: &str) -> Option<ForgeRead> {
-    let segments: Vec<_> = path.strip_prefix('/')?.split('/').collect();
-    if !segments.iter().all(|s| clean_segment(s)) {
-        return None;
-    }
-    let (owner, repo, rev) = match (kind, segments.as_slice()) {
-        (UpstreamConfig::GithubApi {}, ["repos", _, _, "commits", _, ..]) => {
-            return Some(ForgeRead::Commit);
-        }
-        (UpstreamConfig::Github {}, [owner, repo, "archive", filename]) => {
-            (*owner, *repo, filename.strip_suffix(".tar.gz")?)
-        }
-        (UpstreamConfig::GithubApi {}, ["repos", owner, repo, "tarball", rev])
-        | (UpstreamConfig::GithubCodeload {}, [owner, repo, "tar.gz" | "legacy.tar.gz", rev]) => {
-            (*owner, *repo, *rev)
-        }
-        _ => return None,
-    };
-    revision(rev).then(|| ForgeRead::Archive {
-        owner: owner.into(),
-        repo: repo.into(),
+fn segments(uri: &Uri) -> Option<Vec<&str>> {
+    let segments: Vec<_> = uri.path().strip_prefix('/')?.split('/').collect();
+    segments
+        .iter()
+        .all(|s| clean_segment(s))
+        .then_some(segments)
+}
+
+// References are selectors, never paths outside the approved endpoint.
+fn reference(value: &str) -> bool {
+    !value.is_empty()
+        && value.split('/').all(|s| {
+            !s.is_empty()
+                && s != "."
+                && s != ".."
+                && s.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"-_.~+".contains(&b))
+        })
+}
+
+fn archive(kind: UpstreamConfig, repo: String, rev: &str) -> Option<ForgeRead> {
+    reference(rev).then(|| ForgeRead::Archive {
+        kind,
+        repo,
         rev: rev.into(),
     })
 }
@@ -109,6 +162,7 @@ impl Policy {
     pub fn hosts(&self) -> impl Iterator<Item = &str> {
         self.upstreams.keys().map(String::as_str)
     }
+
     pub fn contains(&self, host: &str) -> bool {
         self.upstreams.contains_key(host)
     }
@@ -125,10 +179,8 @@ impl Policy {
         if uri.scheme().is_some() || uri.authority().is_some() || uri.to_string().len() > 4096 {
             return Err(StatusCode::BAD_REQUEST);
         }
-        if matches!(
-            upstream.kind,
-            UpstreamConfig::Git {} | UpstreamConfig::Github {}
-        ) && let Ok(read) = upstream.git.authorize(method, uri, headers, body_empty)
+        if upstream.kind.allows_git()
+            && let Ok(read) = upstream.git.authorize(method, uri, headers, body_empty)
         {
             return Ok(AuthorizedRequest::Git(read));
         }
@@ -136,7 +188,6 @@ impl Policy {
             return Err(StatusCode::FORBIDDEN);
         }
         if !body_empty
-            || uri.query().is_some()
             || headers.contains_key("transfer-encoding")
             || headers.contains_key("content-encoding")
             || headers.contains_key("expect")
@@ -155,7 +206,7 @@ impl Policy {
         {
             return Err(StatusCode::BAD_REQUEST);
         }
-        let operation = forge_read(upstream.kind, uri.path()).ok_or(StatusCode::FORBIDDEN)?;
+        let operation = upstream.kind.read(uri).ok_or(StatusCode::FORBIDDEN)?;
         let mut forwarded = HeaderMap::new();
         for name in ["if-none-match", "if-modified-since", "range", "if-range"] {
             for value in headers.get_all(name) {
@@ -163,14 +214,15 @@ impl Policy {
             }
         }
         forwarded.insert("accept-encoding", "identity".parse().unwrap());
-        if operation == ForgeRead::Commit {
-            forwarded.insert("accept", "application/vnd.github+json".parse().unwrap());
+        if let ForgeRead::Lookup { accept } = &operation {
+            forwarded.insert("accept", accept.parse().unwrap());
         }
-        let url = Url::parse(&format!("https://{host}{}", uri.path()))
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
+        let url =
+            Url::parse(&format!("https://{host}{uri}")).map_err(|_| StatusCode::BAD_REQUEST)?;
         Ok(AuthorizedRequest::Forge(AuthorizedForgeRead {
             url,
             headers: forwarded,
+            kind: upstream.kind,
             operation,
         }))
     }
@@ -191,22 +243,26 @@ impl AuthorizedForgeRead {
             || !url.username().is_empty()
             || url.password().is_some()
             || url.fragment().is_some()
-            || url.query().is_some()
         {
             return Err(());
         }
         let host = url.host_str().ok_or(())?;
-        let uri = url.path().parse().map_err(|_| ())?;
+        let route = match url.query() {
+            Some(query) => format!("{}?{query}", url.path()),
+            None => url.path().into(),
+        };
+        let uri = route.parse().map_err(|_| ())?;
         let AuthorizedRequest::Forge(next) = policy
             .authorize(host, &Method::GET, &uri, &self.headers, true)
             .map_err(|_| ())?
         else {
             return Err(());
         };
-        // Only an archive of the same repository/revision can cross hosts.
         if next.operation != self.operation
-            || (matches!(self.operation, ForgeRead::Commit)
-                && host != self.url.host_str().ok_or(())?)
+            || !self
+                .kind
+                .redirects_to(self.url.host_str().ok_or(())?, next.kind, host)
+            || (matches!(self.operation, ForgeRead::Lookup { .. }) && next.url != self.url)
         {
             return Err(());
         }

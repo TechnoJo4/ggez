@@ -24,6 +24,7 @@ use tokio::{
 };
 use tokio_rustls::TlsConnector;
 
+mod forges;
 #[cfg(unix)]
 mod nix;
 
@@ -59,7 +60,11 @@ fn upstreams() -> Upstreams {
             "codeload.github.com".into(),
             UpstreamConfig::GithubCodeload {},
         ),
-        ("gitlab.com".into(), UpstreamConfig::Git {}),
+        ("gitlab.com".into(), UpstreamConfig::Gitlab {}),
+        ("gitlab.freedesktop.org".into(), UpstreamConfig::Gitlab {}),
+        ("gitlab.gnome.org".into(), UpstreamConfig::Gitlab {}),
+        ("codeberg.org".into(), UpstreamConfig::Forgejo {}),
+        ("git.sr.ht".into(), UpstreamConfig::Sourcehut {}),
     ])
 }
 
@@ -235,7 +240,15 @@ impl Origin {
                                 response
                                     .headers_mut()
                                     .insert("content-type", "application/json".parse().unwrap());
-                            } else if path.contains("/archive/") {
+                            } else if host.starts_with("gitlab.")
+                                && path.contains("/repository/commits?")
+                            {
+                                *response.body_mut() =
+                                    Full::new(Bytes::from(format!(r#"[{{"id":"{REV}"}}]"#)));
+                                response
+                                    .headers_mut()
+                                    .insert("content-type", "application/json".parse().unwrap());
+                            } else if host == "github.com" && path.contains("/archive/") {
                                 *response.status_mut() = StatusCode::FOUND;
                                 response.headers_mut().insert(
                                     "location",
@@ -243,8 +256,17 @@ impl Origin {
                                         .parse()
                                         .unwrap(),
                                 );
-                            } else if path.contains("/tar.gz/") {
+                            } else if path.contains("/tar.gz/")
+                                || path.contains("/archive/")
+                                || path.contains("/repository/archive.tar.gz?")
+                            {
                                 *response.body_mut() = Full::new(Bytes::from(archive()));
+                            } else if host == "git.sr.ht" && path == "/~org/repo/HEAD" {
+                                *response.body_mut() =
+                                    Full::new(Bytes::from_static(b"ref: refs/heads/main\n"));
+                            } else if host == "git.sr.ht" && path == "/~org/repo/info/refs" {
+                                *response.body_mut() =
+                                    Full::new(Bytes::from(format!("{REV}\trefs/heads/main\n")));
                             } else {
                                 *response.body_mut() = Full::new(Bytes::from_static(b"0000"));
                                 response.headers_mut().insert(

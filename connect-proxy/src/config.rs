@@ -16,16 +16,17 @@ use std::{
 pub const HELP: &str = "connect-proxy
   --host-proxy-listener-uds PATH         listener Firecracker forwards guest requests to
   --host-proxy-socket-mode OCTAL         socket permissions (default 600)
-  --host-upstreams-config PATH          JSON object: DNS hostname -> tagged policy
-  --host-ca-certificate PATH            public CA certificate (PEM)
-  --host-ca-signing-key PATH            host-only CA key (unencrypted PKCS#8 PEM)
-  --max-connections N                   concurrent sessions (default 64)
-  --max-request-body-bytes N            Git negotiation bound (default 8388608)
-  --request-timeout-seconds N           entire CONNECT/TLS/HTTP session (default 3600)
+  --host-upstreams-config PATH           JSON object: DNS hostname -> tagged policy
+  --host-ca-certificate PATH             public CA certificate (PEM)
+  --host-ca-signing-key PATH             host-only CA key (unencrypted PKCS#8 PEM)
+  --max-connections N                    concurrent sessions (default 64)
+  --max-request-body-bytes N             Git negotiation bound (default 8388608)
+  --request-timeout-seconds N            entire CONNECT/TLS/HTTP session (default 3600)
 
 guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 CONNECT only, to configured DNS hosts on port 443. TLS terminates here; no tunnels.
-policies: git, github (Git + archives), github-api, github-codeload.
+policies: git; github, forgejo, gitlab, sourcehut (Git + forge reads);
+          github-api, github-codeload (forge reads only).
 leaf keys live in memory; certificates last up to one year, capped by CA expiry.
 listener path must not exist. SIGINT/SIGTERM close sessions and unlink it.";
 
