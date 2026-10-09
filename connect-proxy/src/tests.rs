@@ -145,7 +145,7 @@ fn forge_reads_and_redirects_have_an_explicit_operation_and_destination() {
         assert!(read("api.github.com", path).is_err(), "accepted {path}");
     }
     let archive = format!("/org/repo/archive/{REV}.tar.gz");
-    let AuthorizedRequest::Forge(request) = read("github.com", &archive).unwrap() else {
+    let AuthorizedRequest::Http(request) = read("github.com", &archive).unwrap() else {
         panic!()
     };
     assert!(
@@ -167,7 +167,7 @@ fn forge_reads_and_redirects_have_an_explicit_operation_and_destination() {
         format!("https://codeload.github.com:444/org/repo/tar.gz/{REV}"),
         "https://api.github.com/repos/org/repo/commits/HEAD".into(),
     ] {
-        let AuthorizedRequest::Forge(request) = read("github.com", &archive).unwrap() else {
+        let AuthorizedRequest::Http(request) = read("github.com", &archive).unwrap() else {
             panic!()
         };
         assert!(

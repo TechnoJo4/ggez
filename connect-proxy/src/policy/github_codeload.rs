@@ -1,7 +1,7 @@
-use super::{ForgeRead, UpstreamConfig, archive, revision, segments};
+use super::{ReadOperation, UpstreamConfig, archive, revision, segments};
 use hyper::Uri;
 
-pub(super) fn authorize(uri: &Uri) -> Option<ForgeRead> {
+pub(super) fn authorize(uri: &Uri) -> Option<ReadOperation> {
     if uri.query().is_some() {
         return None;
     }

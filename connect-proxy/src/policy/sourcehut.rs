@@ -1,9 +1,9 @@
-use super::{ForgeRead, UpstreamConfig, archive};
+use super::{ReadOperation, UpstreamConfig, archive};
 use git_policy::clean_segment;
 use hyper::Uri;
 
 // Nix sourcehut: resolves refs with plain HEAD/info/refs reads, then an archive.
-pub(super) fn authorize(uri: &Uri) -> Option<ForgeRead> {
+pub(super) fn authorize(uri: &Uri) -> Option<ReadOperation> {
     if uri.query().is_some() {
         return None;
     }
@@ -15,7 +15,7 @@ pub(super) fn authorize(uri: &Uri) -> Option<ForgeRead> {
     }
     let path = parts.next()?;
     if matches!(path, "HEAD" | "info/refs") {
-        return Some(ForgeRead::Lookup {
+        return Some(ReadOperation::Lookup {
             accept: "text/plain",
         });
     }

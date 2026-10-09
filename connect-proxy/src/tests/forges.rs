@@ -30,7 +30,7 @@ fn forge_routes_accept_nix_selectors_without_admitting_other_api_capabilities() 
         ("git.sr.ht", format!("/~org/repo/archive/{REV}.tar.gz")),
         ("git.sr.ht", "/~org/repo/archive/v1.2.tar.gz".into()),
     ] {
-        let AuthorizedRequest::Forge(read) = authorize(&policy, host, &Method::GET, &path).unwrap() else { panic!() };
+        let AuthorizedRequest::Http(read) = authorize(&policy, host, &Method::GET, &path).unwrap() else { panic!() };
         assert_eq!(read.url().as_str(), format!("https://{host}{path}"));
         assert!(authorize(&policy, host, &Method::POST, &path).is_err());
         assert!(authorize(&policy, host, &Method::DELETE, &path).is_err());
@@ -139,7 +139,7 @@ fn forge_redirects_cannot_change_policy_host_repository_or_selector() {
         ("git.sr.ht", "/~org/repo/HEAD"),
     ] {
         let read = || match authorize(&policy, host, &Method::GET, route).unwrap() {
-            AuthorizedRequest::Forge(read) => read,
+            AuthorizedRequest::Http(read) => read,
             _ => panic!(),
         };
         assert!(read().redirect(&policy, route).is_ok());
@@ -162,7 +162,7 @@ fn forge_redirects_cannot_change_policy_host_repository_or_selector() {
             );
         }
     }
-    let AuthorizedRequest::Forge(github) = authorize(
+    let AuthorizedRequest::Http(github) = authorize(
         &policy,
         "github.com",
         &Method::GET,

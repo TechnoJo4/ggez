@@ -1,9 +1,9 @@
-use super::{ForgeRead, UpstreamConfig, archive};
+use super::{ReadOperation, UpstreamConfig, archive};
 use git_policy::clean_segment;
 use hyper::Uri;
 
 // fetchFromCodeberg/Gitea/Forgejo defaults to this archive, including tag refs.
-pub(super) fn authorize(uri: &Uri) -> Option<ForgeRead> {
+pub(super) fn authorize(uri: &Uri) -> Option<ReadOperation> {
     if uri.query().is_some() {
         return None;
     }

@@ -5,7 +5,7 @@ use std::{io, time::Duration};
 
 pub(crate) struct Client {
     git: git_policy::Client,
-    forge: HttpClient,
+    http: HttpClient,
 }
 
 impl Client {
@@ -13,12 +13,12 @@ impl Client {
     pub fn for_test(http: HttpClient) -> Self {
         Self {
             git: git_policy::Client::for_test(http.clone()),
-            forge: http,
+            http,
         }
     }
 
     pub fn new(deadline: Duration) -> Result<Self, String> {
-        let forge = HttpClient::builder()
+        let http = HttpClient::builder()
             .https_only(true)
             .no_proxy()
             .redirect(redirect::Policy::none())
@@ -28,10 +28,10 @@ impl Client {
             .pool_max_idle_per_host(4)
             .user_agent("ggez-connect-proxy/0.1")
             .build()
-            .map_err(|_| "could not initialize forge HTTPS client")?;
+            .map_err(|_| "could not initialize HTTPS client")?;
         Ok(Self {
             git: git_policy::Client::new(deadline)?,
-            forge,
+            http,
         })
     }
 
@@ -43,30 +43,30 @@ impl Client {
     ) -> io::Result<Response> {
         let mut read = match request {
             AuthorizedRequest::Git(read) => return self.git.fetch(read, body).await,
-            AuthorizedRequest::Forge(read) => read,
+            AuthorizedRequest::Http(read) => read,
         };
         for hop in 0..=3 {
             let response = self
-                .forge
+                .http
                 .get(read.url().clone())
                 .headers(read.headers().clone())
                 .send()
                 .await
-                .map_err(|_| io::Error::other("forge upstream request failed"))?;
+                .map_err(|_| io::Error::other("upstream request failed"))?;
             if !response.status().is_redirection() {
                 return Ok(response);
             }
             if hop == 3 || !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                return Err(io::Error::other("unsupported forge redirect"));
+                return Err(io::Error::other("unsupported HTTP redirect"));
             }
             let location = response
                 .headers()
                 .get("location")
                 .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| io::Error::other("missing forge redirect location"))?;
+                .ok_or_else(|| io::Error::other("missing HTTP redirect location"))?;
             read = read
                 .redirect(policy, location)
-                .map_err(|_| io::Error::other("forge redirect left approved read routes"))?;
+                .map_err(|_| io::Error::other("HTTP redirect left approved read routes"))?;
         }
         unreachable!()
     }

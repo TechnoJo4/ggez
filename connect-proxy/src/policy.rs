@@ -35,7 +35,7 @@ impl UpstreamConfig {
         )
     }
 
-    fn read(self, uri: &Uri) -> Option<ForgeRead> {
+    fn read(self, uri: &Uri) -> Option<ReadOperation> {
         match self {
             Self::Git {} => None, // All Git authorization is in the shared git-policy crate.
             Self::Github {} => github::authorize(uri),
@@ -72,7 +72,7 @@ pub(crate) struct Policy {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum ForgeRead {
+enum ReadOperation {
     Lookup {
         accept: &'static str,
     },
@@ -86,14 +86,14 @@ enum ForgeRead {
 // Neither transport nor client can invent an authorized target.
 pub(crate) enum AuthorizedRequest {
     Git(GitRead),
-    Forge(AuthorizedForgeRead),
+    Http(AuthorizedHttpRead),
 }
 
-pub(crate) struct AuthorizedForgeRead {
+pub(crate) struct AuthorizedHttpRead {
     url: Url,
     headers: HeaderMap,
     kind: UpstreamConfig,
-    operation: ForgeRead,
+    operation: ReadOperation,
 }
 
 pub(crate) fn hostname(host: &str) -> bool {
@@ -135,8 +135,8 @@ fn reference(value: &str) -> bool {
         })
 }
 
-fn archive(kind: UpstreamConfig, repo: String, rev: &str) -> Option<ForgeRead> {
-    reference(rev).then(|| ForgeRead::Archive {
+fn archive(kind: UpstreamConfig, repo: String, rev: &str) -> Option<ReadOperation> {
+    reference(rev).then(|| ReadOperation::Archive {
         kind,
         repo,
         rev: rev.into(),
@@ -214,12 +214,12 @@ impl Policy {
             }
         }
         forwarded.insert("accept-encoding", "identity".parse().unwrap());
-        if let ForgeRead::Lookup { accept } = &operation {
+        if let ReadOperation::Lookup { accept } = &operation {
             forwarded.insert("accept", accept.parse().unwrap());
         }
         let url =
             Url::parse(&format!("https://{host}{uri}")).map_err(|_| StatusCode::BAD_REQUEST)?;
-        Ok(AuthorizedRequest::Forge(AuthorizedForgeRead {
+        Ok(AuthorizedRequest::Http(AuthorizedHttpRead {
             url,
             headers: forwarded,
             kind: upstream.kind,
@@ -228,7 +228,7 @@ impl Policy {
     }
 }
 
-impl AuthorizedForgeRead {
+impl AuthorizedHttpRead {
     pub fn url(&self) -> &Url {
         &self.url
     }
@@ -252,7 +252,7 @@ impl AuthorizedForgeRead {
             None => url.path().into(),
         };
         let uri = route.parse().map_err(|_| ())?;
-        let AuthorizedRequest::Forge(next) = policy
+        let AuthorizedRequest::Http(next) = policy
             .authorize(host, &Method::GET, &uri, &self.headers, true)
             .map_err(|_| ())?
         else {
@@ -262,7 +262,7 @@ impl AuthorizedForgeRead {
             || !self
                 .kind
                 .redirects_to(self.url.host_str().ok_or(())?, next.kind, host)
-            || (matches!(self.operation, ForgeRead::Lookup { .. }) && next.url != self.url)
+            || (matches!(self.operation, ReadOperation::Lookup { .. }) && next.url != self.url)
         {
             return Err(());
         }

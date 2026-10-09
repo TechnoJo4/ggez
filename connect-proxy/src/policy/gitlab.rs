@@ -1,4 +1,4 @@
-use super::{ForgeRead, UpstreamConfig, archive, reference};
+use super::{ReadOperation, UpstreamConfig, archive, reference};
 use git_policy::clean_segment;
 use hyper::Uri;
 use reqwest::Url;
@@ -29,13 +29,13 @@ fn selector(uri: &Uri, key: &str) -> Option<String> {
 }
 
 // Nix gitlab: and fetchFromGitLab both use these API routes, not Git.
-pub(super) fn authorize(uri: &Uri) -> Option<ForgeRead> {
+pub(super) fn authorize(uri: &Uri) -> Option<ReadOperation> {
     let parts: Vec<_> = uri.path().strip_prefix('/')?.split('/').collect();
     match parts.as_slice() {
         ["api", "v4", "projects", slug, "repository", "commits"] => {
             project(slug)?;
             selector(uri, "ref_name")?;
-            Some(ForgeRead::Lookup {
+            Some(ReadOperation::Lookup {
                 accept: "application/json",
             })
         }
