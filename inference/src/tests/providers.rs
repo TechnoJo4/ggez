@@ -99,7 +99,10 @@ async fn provider_tuning_and_reasoning_history_survive_authorization_and_forward
                         "provider-secret",
                         Vec::new(),
                     )),
-                    models: Arc::new(HashSet::from([body["model"].as_str().unwrap().to_owned()])),
+                    models: Some(Arc::new(HashSet::from([body["model"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned()]))),
                     protocol: *protocol,
                 },
             )

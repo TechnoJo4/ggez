@@ -14,7 +14,7 @@ pub(crate) enum Protocol {
 
 pub(crate) struct Route {
     pub endpoint: Arc<Endpoint>,
-    pub models: Arc<HashSet<String>>,
+    pub models: Option<Arc<HashSet<String>>>,
     pub protocol: Protocol,
 }
 
@@ -79,8 +79,13 @@ impl Policy {
         let model = body
             .get("model")
             .and_then(serde_json::Value::as_str)
+            .filter(|model| !model.is_empty() && model.len() <= 256)
             .ok_or(StatusCode::BAD_REQUEST)?;
-        if !route.models.contains(model) {
+        if route
+            .models
+            .as_ref()
+            .is_some_and(|models| !models.contains(model))
+        {
             return Err(StatusCode::FORBIDDEN);
         }
         match route.protocol {

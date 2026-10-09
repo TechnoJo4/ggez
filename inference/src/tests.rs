@@ -134,7 +134,7 @@ fn gateway(completion_origin: &str, messages_origin: &str, other_origin: &str) -
             path.into(),
             Route {
                 endpoint,
-                models,
+                models: Some(models),
                 protocol,
             },
         );

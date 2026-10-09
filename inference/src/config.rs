@@ -29,7 +29,8 @@ pub const HELP: &str = "inference
 
 guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 routes: /NAME/v1/chat/completions and /NAME/v1/messages, when configured.
-models and endpoints are required config; keys are read from host-only files.
+endpoints are required; models is an optional whitelist (omitted allows all).
+keys are read from host-only files.
 no gateway rate limiting; upstream 429 and Retry-After are forwarded.
 JSON responses only; stream: true is rejected. newlines keep response bodies alive.
 listener path must not already exist. SIGINT/SIGTERM close requests and unlink it.";
@@ -43,7 +44,7 @@ pub struct RegistryFile {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamConfig {
-    pub models: Vec<String>,
+    pub models: Option<Vec<String>>,
     pub completions: Option<EndpointConfig>,
     pub messages: Option<EndpointConfig>,
 }
@@ -146,18 +147,22 @@ impl RegistryFile {
                     "upstream names must be 1..=64 ASCII letters, digits, '-' or '_'".into(),
                 );
             }
-            if upstream.models.is_empty()
-                || upstream
-                    .models
-                    .iter()
-                    .any(|model| model.is_empty() || model.len() > 256)
-            {
-                return Err("each upstream needs a nonempty model whitelist".into());
+            if upstream.models.as_ref().is_some_and(|models| {
+                models.is_empty()
+                    || models
+                        .iter()
+                        .any(|model| model.is_empty() || model.len() > 256)
+            }) {
+                return Err(
+                    "model whitelist must contain nonempty model names up to 256 bytes".into(),
+                );
             }
             if upstream.completions.is_none() && upstream.messages.is_none() {
                 return Err("each upstream needs at least one endpoint".into());
             }
-            let models: Arc<HashSet<String>> = Arc::new(upstream.models.into_iter().collect());
+            let models: Option<Arc<HashSet<String>>> = upstream
+                .models
+                .map(|models| Arc::new(models.into_iter().collect()));
             for (endpoint, protocol, suffix) in [
                 (
                     upstream.completions,
@@ -337,6 +342,58 @@ mod tests {
         )
         .unwrap();
         assert!(registry.load().is_err());
+    }
+
+    #[test]
+    fn omitted_model_whitelist_allows_models_in_both_protocols() {
+        let key = Secret::new();
+        let registry: RegistryFile = serde_json::from_value(json!({"upstreams": {
+            "provider": {"completions": endpoint(&key), "messages": endpoint(&key)}
+        }}))
+        .unwrap();
+        let policy = registry.load().unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        for path in ["/provider/v1/messages", "/provider/v1/chat/completions"] {
+            let uri = path.parse().unwrap();
+            let mut body = json!({"model":"new-provider/model", "max_tokens":1024,
+                "messages":[{"role":"user","content":"hi"}]});
+            assert!(
+                policy
+                    .authorize(
+                        &hyper::Method::POST,
+                        &uri,
+                        &headers,
+                        &serde_json::to_vec(&body).unwrap()
+                    )
+                    .is_ok()
+            );
+            body["stream"] = json!(true);
+            assert!(
+                policy
+                    .authorize(
+                        &hyper::Method::POST,
+                        &uri,
+                        &headers,
+                        &serde_json::to_vec(&body).unwrap()
+                    )
+                    .is_err()
+            );
+            body["stream"] = json!(false);
+            for model in [json!(null), json!(1), json!(""), json!("x".repeat(257))] {
+                body["model"] = model;
+                assert!(
+                    policy
+                        .authorize(
+                            &hyper::Method::POST,
+                            &uri,
+                            &headers,
+                            &serde_json::to_vec(&body).unwrap()
+                        )
+                        .is_err()
+                );
+            }
+        }
     }
 
     #[test]
