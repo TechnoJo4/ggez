@@ -5,13 +5,25 @@ pub use client::Client;
 
 use hyper::{HeaderMap, Method, StatusCode, Uri, header::HeaderValue};
 use reqwest::Url;
+use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap},
     sync::Arc,
 };
 
-// Host-owned JSON object: upstream name -> HTTPS base URL, ending in '/'.
-pub type Upstreams = BTreeMap<String, String>;
+// Redirect bases are host-approved destinations, never discovered from a guest
+// request or trusted merely because an upstream returned a Location header.
+pub type Upstreams = BTreeMap<String, UpstreamConfig>;
+
+#[derive(Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum UpstreamConfig {
+    Url(String),
+    WithRedirects {
+        url: String,
+        redirect_bases: Vec<String>,
+    },
+}
 
 pub struct Policy {
     upstreams: HashMap<String, GitPolicy>,
@@ -41,7 +53,7 @@ impl Operation {
 // Only the policy can choose a destination and operation. Request bytes remain
 // opaque: git-upload-pack interprets them as read negotiation, never as a push.
 pub struct AuthorizedRead {
-    base: Arc<Url>,
+    bases: Arc<[Url]>,
     url: Url,
     operation: Operation,
     headers: HeaderMap,
@@ -60,7 +72,13 @@ pub fn clean_segment(segment: &str) -> bool {
 }
 
 fn operation(method: &Method, path: &str, query: Option<&str>) -> Result<Operation, StatusCode> {
-    if path.len() > 4096 || !path.split('/').all(clean_segment) {
+    // Tangled supports @handle and did:plc identifiers as repository segments.
+    let segment = |s: &str| {
+        clean_segment(s)
+            || s.strip_prefix('@').is_some_and(clean_segment)
+            || s.strip_prefix("did:plc:").is_some_and(clean_segment)
+    };
+    if path.len() > 4096 || !path.split('/').all(segment) {
         return Err(StatusCode::BAD_REQUEST);
     }
     if method == Method::GET
@@ -71,7 +89,8 @@ fn operation(method: &Method, path: &str, query: Option<&str>) -> Result<Operati
     {
         Ok(Operation::Discover)
     } else if method == Method::POST
-        && query.is_none()
+        // Tangled's upload-pack redirect has a trailing '?' with no parameters.
+        && query.is_none_or(str::is_empty)
         && path
             .strip_suffix("/git-upload-pack")
             .is_some_and(|repo| !repo.is_empty())
@@ -82,10 +101,14 @@ fn operation(method: &Method, path: &str, query: Option<&str>) -> Result<Operati
     }
 }
 
-pub struct GitPolicy(Arc<Url>);
+pub struct GitPolicy(Arc<[Url]>);
 
 impl GitPolicy {
     pub fn new(base: &str) -> Result<Self, String> {
+        Ok(Self(vec![Self::base(base)?].into()))
+    }
+
+    fn base(base: &str) -> Result<Url, String> {
         let url = Url::parse(base).map_err(|_| "invalid upstream base URL")?;
         // Check raw path too: URL parsing would otherwise normalize '..'.
         let raw_path = base
@@ -106,7 +129,7 @@ impl GitPolicy {
         {
             return Err("upstream base must be HTTPS without credentials, query, escaping, or traversal, ending in '/'".into());
         }
-        Ok(Self(Arc::new(url)))
+        Ok(url)
     }
 
     pub fn authorize(
@@ -119,7 +142,7 @@ impl GitPolicy {
         validate_head(method, uri, headers)?;
         let path = uri
             .path()
-            .strip_prefix(self.0.path())
+            .strip_prefix(self.0[0].path())
             .ok_or(StatusCode::FORBIDDEN)?;
         self.authorize_path(method, uri, path, headers, body_empty)
     }
@@ -131,11 +154,22 @@ impl Policy {
         if upstreams.is_empty() {
             return Err("upstreams registry is empty".into());
         }
-        for (name, base) in upstreams {
+        for (name, config) in upstreams {
             if name.len() > 64 || !clean_segment(&name) {
                 return Err("invalid upstream name".into());
             }
-            bases.insert(name, GitPolicy::new(&base)?);
+            let (url, redirects) = match config {
+                UpstreamConfig::Url(url) => (url, Vec::new()),
+                UpstreamConfig::WithRedirects {
+                    url,
+                    redirect_bases,
+                } => (url, redirect_bases),
+            };
+            let mut destinations = vec![GitPolicy::base(&url)?];
+            for base in redirects {
+                destinations.push(GitPolicy::base(&base)?);
+            }
+            bases.insert(name, GitPolicy(destinations.into()));
         }
         Ok(Self { upstreams: bases })
     }
@@ -148,11 +182,20 @@ impl Policy {
                 .map(|(name, url)| {
                     (
                         (*name).to_owned(),
-                        GitPolicy(Arc::new(Url::parse(url).unwrap())),
+                        GitPolicy(vec![Url::parse(url).unwrap()].into()),
                     )
                 })
                 .collect(),
         }
+    }
+
+    #[cfg(feature = "test-upstreams")]
+    pub fn with_test_redirects(mut self, name: &str, urls: &[&str]) -> Self {
+        let policy = self.upstreams.get_mut(name).unwrap();
+        let mut bases = policy.0.to_vec();
+        bases.extend(urls.iter().map(|url| Url::parse(url).unwrap()));
+        policy.0 = bases.into();
+        self
     }
 
     pub fn authorize(
@@ -258,11 +301,11 @@ impl GitPolicy {
             HeaderValue::from_static(operation.response_type()),
         );
         forwarded.insert("accept-encoding", HeaderValue::from_static("identity"));
-        let mut url = (*self.0).clone();
-        url.set_path(&format!("{}{path}", self.0.path()));
+        let mut url = self.0[0].clone();
+        url.set_path(&format!("{}{path}", self.0[0].path()));
         url.set_query(uri.query());
         Ok(AuthorizedRead {
-            base: self.0.clone(),
+            bases: self.0.clone(),
             url,
             operation,
             headers: forwarded,
@@ -280,22 +323,26 @@ impl AuthorizedRead {
     pub fn headers(&self) -> &HeaderMap {
         &self.headers
     }
-    // Follow a canonical-repository redirect only within the original base,
-    // and recheck the read operation. Never expose a Location to the guest.
+    // Recheck the read operation on every redirect, including a forge -> knot
+    // hop. Never expose a Location to the guest or admit an unconfigured host.
     pub fn redirect(&mut self, location: &str) -> Result<(), InvalidRedirect> {
         let url = self.url.join(location).map_err(|_| InvalidRedirect)?;
-        if url.scheme() != self.base.scheme()
-            || url.host_str() != self.base.host_str()
-            || url.port_or_known_default() != self.base.port_or_known_default()
-            || !url.username().is_empty()
-            || url.password().is_some()
-            || url.fragment().is_some()
-        {
+        if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
             return Err(InvalidRedirect);
         }
+        let base = self
+            .bases
+            .iter()
+            .find(|base| {
+                url.scheme() == base.scheme()
+                    && url.host_str() == base.host_str()
+                    && url.port_or_known_default() == base.port_or_known_default()
+                    && url.path().starts_with(base.path())
+            })
+            .ok_or(InvalidRedirect)?;
         let path = url
             .path()
-            .strip_prefix(self.base.path())
+            .strip_prefix(base.path())
             .ok_or(InvalidRedirect)?;
         if operation(&self.operation.method(), path, url.query()).map_err(|_| InvalidRedirect)?
             != self.operation

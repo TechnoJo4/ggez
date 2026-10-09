@@ -94,6 +94,14 @@ class ExportTests(unittest.TestCase):
             generator.export(self.compose, self.output)
         self.assertFalse(self.output.exists())
 
+    def test_git_redirect_bases_stay_on_the_host(self):
+        self.upstreams["tangled"] = {"url": "https://tangled.org/", "redirect_bases": ["https://knot1.tangled.sh/"]}
+        (self.root / "git.json").write_text(json.dumps(self.upstreams))
+        generator.export(self.compose, self.output)
+        deployment = json.loads((self.output / "deployment.json").read_text())
+        self.assertEqual(deployment["git"]["upstreams"]["tangled"], "https://tangled.org/")
+        self.assertNotIn("knot1.tangled.sh", json.dumps(deployment))
+
     def test_packaged_script_reads_the_requested_checkout(self):
         packaged = self.root / "store-bin"
         packaged.mkdir()

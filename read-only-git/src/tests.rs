@@ -1,6 +1,6 @@
 use crate::server::{Gateway, serve};
 use bytes::Bytes;
-use git_policy::{Client, Policy, Upstreams};
+use git_policy::{Client, Policy, UpstreamConfig, Upstreams};
 use http_body_util::{BodyExt, Full};
 use hyper::{HeaderMap, Method, Response, StatusCode, server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;
@@ -409,7 +409,11 @@ fn registry_is_a_whitelist_of_named_https_bases() {
         ("git/hub", "https://github.com/"),
     ] {
         assert!(
-            Policy::new(Upstreams::from([(name.into(), url.into())])).is_err(),
+            Policy::new(Upstreams::from([(
+                name.into(),
+                UpstreamConfig::Url(url.into())
+            )]))
+            .is_err(),
             "accepted {name} -> {url}"
         );
     }
@@ -418,9 +422,118 @@ fn registry_is_a_whitelist_of_named_https_bases() {
     )
     .unwrap();
     assert!(Policy::new(config).is_ok());
+    let config: Upstreams = serde_json::from_str(
+        r#"{"tangled":{"url":"https://tangled.org/","redirect_bases":["https://knot1.tangled.sh/"]}}"#,
+    ).unwrap();
+    assert!(Policy::new(config).is_ok());
+    for base in [
+        "http://knot.example/",
+        "https://user@knot.example/",
+        "https://knot.example",
+        "https://knot.example/base/../",
+        "https://knot.example/%2f/",
+    ] {
+        let config: Upstreams = serde_json::from_value(serde_json::json!({
+            "tangled": {"url": "https://tangled.org/", "redirect_bases": [base]}
+        }))
+        .unwrap();
+        assert!(
+            Policy::new(config).is_err(),
+            "accepted redirect base {base}"
+        );
+    }
     assert!(
         serde_json::from_str::<Upstreams>(r#"{"github":{"url":"https://github.com/"}}"#).is_err()
     );
+    assert!(
+        serde_json::from_str::<Upstreams>(
+            r#"{"tangled":{"url":"https://tangled.org/","redirect_bases":[],"anything":true}}"#
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn knot_redirects_require_an_explicit_base_and_a_read_operation() {
+    let knot = Origin::reads().await;
+    let stranger = Origin::reads().await;
+    for (location, allowed) in [
+        (
+            format!(
+                "{}/git/did:plc:abc123/info/refs?service=git-upload-pack",
+                knot.url
+            ),
+            true,
+        ),
+        (
+            format!(
+                "{}/git/did:plc:abc123/info/refs?service=git-upload-pack",
+                stranger.url
+            ),
+            false,
+        ),
+        (
+            format!(
+                "{}/outside/repo/info/refs?service=git-upload-pack",
+                knot.url
+            ),
+            false,
+        ),
+        (
+            format!("{}/git/repo/info/refs?service=git-receive-pack", knot.url),
+            false,
+        ),
+        (format!("{}/git/repo/git-receive-pack", knot.url), false),
+        (format!("{}/git/repo/git-upload-pack", knot.url), false),
+        (
+            format!(
+                "{}/git/repo/info/refs?service=git-upload-pack&write=1",
+                knot.url
+            ),
+            false,
+        ),
+        (
+            format!(
+                "{}/git/repo/info/refs?service=git-upload-pack#fragment",
+                knot.url
+            ),
+            false,
+        ),
+        (
+            format!(
+                "{}/git/%2e%2e/repo/info/refs?service=git-upload-pack",
+                knot.url
+            ),
+            false,
+        ),
+    ] {
+        let origin = Origin::new(move |_| {
+            let mut response = reply(StatusCode::TEMPORARY_REDIRECT, "text/plain", Vec::new());
+            response
+                .headers_mut()
+                .insert("location", location.parse().unwrap());
+            response
+        })
+        .await;
+        let configured = Arc::new(Gateway {
+            policy: Policy::for_test(&[("tangled", &format!("{}/", origin.url))])
+                .with_test_redirects("tangled", &[&format!("{}/git/", knot.url)]),
+            client: Client::new(Duration::from_secs(30)).unwrap(),
+            max_body: 8 * 1024 * 1024,
+        });
+        let before = knot.requests.lock().unwrap().len();
+        let response = exchange(configured, b"GET /tangled/@user.example/repo/info/refs?service=git-upload-pack HTTP/1.1\r\nHost: guest\r\n\r\n").await;
+        assert!(response.starts_with(if allowed {
+            b"HTTP/1.1 200"
+        } else {
+            b"HTTP/1.1 502"
+        }));
+        assert_eq!(
+            knot.requests.lock().unwrap().len(),
+            before + usize::from(allowed)
+        );
+        assert!(stranger.requests.lock().unwrap().is_empty());
+    }
 }
 
 #[tokio::test]

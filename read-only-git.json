@@ -2,6 +2,10 @@
   "github": "https://github.com/",
   "gitlab": "https://gitlab.com/",
   "codeberg": "https://codeberg.org/",
+  "tangled": {
+    "url": "https://tangled.org/",
+    "redirect_bases": ["https://knot1.tangled.sh/"]
+  },
   "freedesktop": "https://gitlab.freedesktop.org/",
   "gnome": "https://gitlab.gnome.org/",
   "sourcehut": "https://git.sr.ht/"

@@ -5,7 +5,7 @@ use std::{collections::HashSet, ffi::OsString, fs::File, io::Read, path::PathBuf
 pub const HELP: &str = "read-only-git
   --host-git-listener-uds PATH            listener Firecracker forwards guest requests to
   --host-git-socket-mode OCTAL            socket permissions (default 600)
-  --host-upstreams-config PATH            JSON object: upstream name -> HTTPS base URL
+  --host-upstreams-config PATH            JSON: name -> HTTPS base or {url, redirect_bases}
   --max-connections N                     concurrent requests (default 64)
   --max-request-body-bytes N              negotiation memory bound (default 8388608)
   --request-timeout-seconds N             entire request including pack (default 3600)
@@ -13,7 +13,7 @@ pub const HELP: &str = "read-only-git
 guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 base URLs end in '/'. guest repository URLs start with /NAME/.
 only GET info/refs?service=git-upload-pack and POST git-upload-pack are admitted.
-redirects stay within the original upstream base and the same read operation.
+redirects stay within the upstream's configured bases and the same read operation.
 listener path must not exist. SIGINT/SIGTERM close requests and unlink it.";
 
 pub struct Config {
@@ -81,8 +81,9 @@ impl Config {
         if bytes.len() > 1024 * 1024 {
             return Err("upstream config exceeds size bound".into());
         }
-        let upstreams: Upstreams = serde_json::from_slice(&bytes)
-            .map_err(|_| "upstream config must be a JSON object mapping names to base URLs")?;
+        let upstreams: Upstreams = serde_json::from_slice(&bytes).map_err(
+            |_| "upstream config must map names to HTTPS bases or {url, redirect_bases}",
+        )?;
         let gateway = Gateway {
             policy: Policy::new(upstreams)?,
             client: Client::new(deadline)?,

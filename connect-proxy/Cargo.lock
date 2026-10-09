@@ -352,6 +352,7 @@ dependencies = [
  "bytes",
  "hyper",
  "reqwest",
+ "serde",
 ]
 
 [[package]]

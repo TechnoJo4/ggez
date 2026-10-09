@@ -342,3 +342,135 @@ async fn real_git_clones_fetches_and_cannot_push_to_a_writable_upstream() {
         "push contacted the upstream"
     );
 }
+
+#[tokio::test]
+async fn real_git_follows_tangled_knot_routes_without_exposing_them_to_the_guest() {
+    let fixture = Arc::new(Fixture::new());
+    let setup = fixture.clone();
+    tokio::task::spawn_blocking(move || seed(&setup.0))
+        .await
+        .unwrap();
+    let root = fixture.clone();
+    let knot = Origin::new(move |request| {
+        let uri = request
+            .uri
+            .to_string()
+            .replace(
+                "/git/did:plc:j5hmlfdrwkvtxm7cjmu7j2is/",
+                "/backend/group/repo.git/",
+            )
+            .parse()
+            .unwrap();
+        backend(
+            &root.0,
+            &Recorded {
+                uri,
+                method: request.method.clone(),
+                headers: request.headers.clone(),
+                body: request.body.clone(),
+            },
+        )
+    })
+    .await;
+    let destination = knot.url.clone();
+    let appview = Origin::new(move |request| {
+        let path = request.uri.path();
+        let location = if path.starts_with("/@") {
+            format!("/{}", path.trim_start_matches("/@"))
+        } else {
+            let operation = path.rsplit('/').next().unwrap();
+            let suffix = if operation == "refs" {
+                "info/refs"
+            } else {
+                operation
+            };
+            format!("{destination}/git/did:plc:j5hmlfdrwkvtxm7cjmu7j2is/{suffix}")
+        };
+        // The appview includes '?' even when an upload-pack query is empty.
+        let location = format!("{location}?{}", request.uri.query().unwrap_or(""));
+        let mut response = reply(StatusCode::TEMPORARY_REDIRECT, "text/plain", Vec::new());
+        response
+            .headers_mut()
+            .insert("location", location.parse().unwrap());
+        response
+    })
+    .await;
+    let configured = Arc::new(Gateway {
+        policy: Policy::for_test(&[("tangled", &format!("{}/", appview.url))])
+            .with_test_redirects("tangled", &[&format!("{}/git/", knot.url)]),
+        client: Client::new(Duration::from_secs(30)).unwrap(),
+        max_body: 8 * 1024 * 1024,
+    });
+    let bridge = HttpBridge::new(configured).await;
+    let guest_url = bridge.url.clone();
+    let rewrite = format!("url.{}/tangled/.insteadOf=https://tangled.org/", bridge.url);
+    let work = fixture.clone();
+    tokio::task::spawn_blocking(move || {
+        for (index, repository) in [
+            "user.example/repo",
+            "@user.example/repo",
+            "did:plc:j5hmlfdrwkvtxm7cjmu7j2is",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let directory = format!("tangled-{index}");
+            git(
+                &work.0,
+                &[
+                    "-c",
+                    &rewrite,
+                    "clone",
+                    "-q",
+                    "--depth=1",
+                    &format!("https://tangled.org/{repository}"),
+                    &directory,
+                ],
+            );
+            let cloned = work.0.join(directory);
+            assert_eq!(
+                fs::read(cloned.join("payload")).unwrap(),
+                fs::read(work.0.join("work/payload")).unwrap()
+            );
+            git(
+                &cloned,
+                &[
+                    "config",
+                    rewrite.split_once('=').unwrap().0,
+                    "https://tangled.org/",
+                ],
+            );
+            git(&cloned, &["fetch", "-q"]);
+            let remote = git(&cloned, &["remote", "get-url", "origin"]);
+            assert!(String::from_utf8_lossy(&remote.stdout).starts_with(&guest_url));
+        }
+    })
+    .await
+    .unwrap();
+    let before = (
+        appview.requests.lock().unwrap().len(),
+        knot.requests.lock().unwrap().len(),
+    );
+    tokio::task::spawn_blocking(move || {
+        let output = git_command(&fixture.0.join("tangled-0"))
+            .args(["push", "origin", "HEAD:refs/heads/forbidden"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("403"),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        before,
+        (
+            appview.requests.lock().unwrap().len(),
+            knot.requests.lock().unwrap().len()
+        ),
+        "push reached an upstream"
+    );
+}

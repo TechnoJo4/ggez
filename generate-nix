@@ -79,7 +79,8 @@ def export(compose, output):
         deployment = {"name": name, "vsockPort": port, "guestTcpPort": tcp, "gateway": gateway}
         if gateway == "read-only-git":
             config = argument(service, "--host-upstreams-config")
-            deployment["upstreams"] = json.loads(mounted_file(service, config).read_text())
+            upstreams = json.loads(mounted_file(service, config).read_text())
+            deployment["upstreams"] = {name: upstream if isinstance(upstream, str) else upstream["url"] for name, upstream in upstreams.items()}
         if gateway == "connect-proxy":
             config = argument(service, "--host-upstreams-config")
             upstreams = json.loads(mounted_file(service, config).read_text())
