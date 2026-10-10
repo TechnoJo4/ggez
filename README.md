@@ -1,6 +1,6 @@
 # gateways for ez
 
-gateways for a sandboxed agent without a network interface, with access control baked into the logic.
+gateways for a sandboxed agent without a network interface, with access control baked into the logic. [vm setup instructions](https://merkletr.ee/2026/ez)
 
 | codebase | role |
 | --- | --- |
