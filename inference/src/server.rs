@@ -1,6 +1,10 @@
-use crate::{client::Client, policy::Policy};
+use crate::{
+    client::Client,
+    policy::{Policy, ResponseKind},
+};
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full, Limited};
+use futures_util::StreamExt;
+use http_body_util::{BodyExt, Full, Limited, StreamBody};
 use hyper::{
     Request, Response, StatusCode,
     body::{Body, Frame, Incoming},
@@ -85,6 +89,18 @@ impl Body for JsonBody {
     }
 }
 
+fn event_stream_body(upstream: reqwest::Response, mut limit: usize) -> ResponseBody {
+    let frames = upstream.bytes_stream().map(move |chunk| {
+        let chunk = chunk.map_err(|_| io::Error::other("inference response failed"))?;
+        if chunk.len() > limit {
+            return Err(io::Error::other("inference response exceeds size bound"));
+        }
+        limit -= chunk.len();
+        Ok(Frame::data(chunk))
+    });
+    StreamBody::new(frames).boxed_unsync()
+}
+
 fn error(status: StatusCode) -> Response<ResponseBody> {
     let body = Full::new(Bytes::from_static(b"{\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"inference request unavailable\"}}"))
         .map_err(|never| match never {}).boxed_unsync();
@@ -115,7 +131,7 @@ async fn handle(
             Ok(request) => request,
             Err(status) => return Ok(error(status)),
         };
-    let upstream = match gateway.client.fetch(authorized).await {
+    let (upstream, response_kind) = match gateway.client.fetch(authorized).await {
         Ok(response) => response,
         Err(_) => return Ok(error(StatusCode::BAD_GATEWAY)),
     };
@@ -136,7 +152,7 @@ async fn handle(
         response.headers_mut().extend(headers);
         return Ok(response);
     }
-    if !crate::json_content_type(upstream.headers())
+    if !crate::content_type(upstream.headers(), response_kind.content_type())
         || upstream
             .headers()
             .get("content-encoding")
@@ -147,8 +163,11 @@ async fn handle(
     {
         return Ok(error(StatusCode::BAD_GATEWAY));
     }
-    let mut response =
-        Response::new(JsonBody::new(upstream, gateway.max_response_body).boxed_unsync());
+    let body = match response_kind {
+        ResponseKind::Json => JsonBody::new(upstream, gateway.max_response_body).boxed_unsync(),
+        ResponseKind::EventStream => event_stream_body(upstream, gateway.max_response_body),
+    };
+    let mut response = Response::new(body);
     *response.status_mut() = status;
     *response.headers_mut() = headers;
     Ok(response)

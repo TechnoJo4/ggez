@@ -12,6 +12,21 @@ pub(crate) enum Protocol {
     Messages,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ResponseKind {
+    Json,
+    EventStream,
+}
+
+impl ResponseKind {
+    pub fn content_type(self) -> &'static str {
+        match self {
+            Self::Json => "application/json",
+            Self::EventStream => "text/event-stream",
+        }
+    }
+}
+
 pub(crate) struct Route {
     pub endpoint: Arc<Endpoint>,
     pub models: Option<Arc<HashSet<String>>>,
@@ -27,11 +42,12 @@ pub(crate) struct AuthorizedRequest {
     endpoint: Arc<Endpoint>,
     body: Bytes,
     headers: HeaderMap,
+    response_kind: ResponseKind,
 }
 
 impl AuthorizedRequest {
-    pub fn into_parts(self) -> (Arc<Endpoint>, Bytes, HeaderMap) {
-        (self.endpoint, self.body, self.headers)
+    pub fn into_parts(self) -> (Arc<Endpoint>, Bytes, HeaderMap, ResponseKind) {
+        (self.endpoint, self.body, self.headers, self.response_kind)
     }
 }
 
@@ -70,7 +86,7 @@ impl Policy {
                 return Err(StatusCode::BAD_REQUEST);
             }
         }
-        if !crate::json_content_type(headers) {
+        if !crate::content_type(headers, "application/json") {
             return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
         }
         let route = self.routes.get(uri.path()).ok_or(StatusCode::NOT_FOUND)?;
@@ -93,7 +109,17 @@ impl Policy {
             Protocol::Messages => protocols::messages(&body),
         }
         .map_err(|_| StatusCode::BAD_REQUEST)?;
-        body["stream"] = serde_json::Value::Bool(false);
+        let response_kind = if body
+            .get("stream")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            ResponseKind::EventStream
+        } else {
+            ResponseKind::Json
+        };
+        body["stream"] =
+            serde_json::Value::Bool(matches!(response_kind, ResponseKind::EventStream));
         let mut forwarded = HeaderMap::new();
         for name in &route.endpoint.guest_headers {
             if headers.get_all(name).iter().count() > 1 {
@@ -111,6 +137,7 @@ impl Policy {
             endpoint: route.endpoint.clone(),
             body,
             headers: forwarded,
+            response_kind,
         })
     }
 }

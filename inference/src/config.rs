@@ -24,7 +24,7 @@ pub const HELP: &str = "inference
   --host-upstreams-config PATH           JSON registry; see config.rs for its schema
   --max-connections N                    concurrent requests (default 16)
   --max-request-body-bytes N             request memory bound (default 8388608)
-  --max-response-body-bytes N            response memory bound (default 16777216)
+  --max-response-body-bytes N            response byte bound (default 16777216)
   --request-timeout-seconds N            request + response deadline (default 3600)
 
 guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
@@ -32,7 +32,7 @@ routes: /NAME/v1/chat/completions and /NAME/v1/messages, when configured.
 endpoints are required; models is an optional whitelist (omitted allows all).
 keys are read from host-only files.
 no gateway rate limiting; upstream 429 and Retry-After are forwarded.
-JSON responses only; stream: true is rejected. newlines keep response bodies alive.
+JSON responses are validated before forwarding; stream: true forwards bounded SSE chunks.
 stale listener sockets are replaced; active sockets and other files are refused.
 SIGINT/SIGTERM close requests and unlink the listener socket.";
 
@@ -378,7 +378,7 @@ mod tests {
                         &headers,
                         &serde_json::to_vec(&body).unwrap()
                     )
-                    .is_err()
+                    .is_ok()
             );
             body["stream"] = json!(false);
             for model in [json!(null), json!(1), json!(""), json!("x".repeat(257))] {

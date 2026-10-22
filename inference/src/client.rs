@@ -1,4 +1,4 @@
-use crate::policy::AuthorizedRequest;
+use crate::policy::{AuthorizedRequest, ResponseKind};
 use hyper::{
     HeaderMap,
     header::{HeaderName, HeaderValue},
@@ -95,8 +95,11 @@ impl Client {
         Ok(Self(client))
     }
 
-    pub async fn fetch(&self, request: AuthorizedRequest) -> io::Result<reqwest::Response> {
-        let (endpoint, body, guest_headers) = request.into_parts();
+    pub async fn fetch(
+        &self,
+        request: AuthorizedRequest,
+    ) -> io::Result<(reqwest::Response, ResponseKind)> {
+        let (endpoint, body, guest_headers, response_kind) = request.into_parts();
         let mut headers = endpoint.headers.clone();
         // Host-set headers win over guest-supplied values, even if explicitly allowed.
         for (name, value) in &guest_headers {
@@ -105,14 +108,19 @@ impl Client {
             }
         }
         headers.insert("content-type", HeaderValue::from_static("application/json"));
-        headers.insert("accept", HeaderValue::from_static("application/json"));
+        headers.insert(
+            "accept",
+            HeaderValue::from_static(response_kind.content_type()),
+        );
         headers.insert("accept-encoding", HeaderValue::from_static("identity"));
-        self.0
+        let response = self
+            .0
             .post(endpoint.url.clone())
             .headers(headers)
             .body(body)
             .send()
             .await
-            .map_err(|_| io::Error::other("inference upstream request failed"))
+            .map_err(|_| io::Error::other("inference upstream request failed"))?;
+        Ok((response, response_kind))
     }
 }

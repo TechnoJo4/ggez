@@ -200,6 +200,7 @@ pub(crate) fn completions(value: &Value) -> Check {
             "max_tokens",
             "max_completion_tokens",
             "stream",
+            "stream_options",
             "stop",
             "frequency_penalty",
             "presence_penalty",
@@ -238,12 +239,25 @@ pub(crate) fn completions(value: &Value) -> Check {
             "repetition_penalty",
             "top_logprobs",
         ],
-        &["parallel_tool_calls", "include_reasoning", "logprobs"],
+        &[
+            "parallel_tool_calls",
+            "include_reasoning",
+            "logprobs",
+            "store",
+            "stream",
+        ],
     )?;
     cached(object)?;
     if let Some(value) = optional(object, "usage") {
         let usage = fields(value, &["include"])?;
         scalars(usage, &[], &["include"])?;
+    }
+    if let Some(value) = optional(object, "stream_options") {
+        let options = fields(value, &["include_usage"])?;
+        scalars(options, &[], &["include_usage"])?;
+        if optional(object, "stream") != Some(&Value::Bool(true)) {
+            return Err(());
+        }
     }
     if let Some(value) = optional(object, "logit_bias")
         && !value
@@ -257,10 +271,7 @@ pub(crate) fn completions(value: &Value) -> Check {
         let template = fields(value, &["enable_thinking"])?;
         scalars(template, &[], &["enable_thinking"])?;
     }
-    if ["store", "stream"]
-        .iter()
-        .any(|key| optional(object, key).is_some_and(|v| v != &Value::Bool(false)))
-    {
+    if optional(object, "store").is_some_and(|v| v != &Value::Bool(false)) {
         return Err(());
     }
     for key in ["max_tokens", "max_completion_tokens"] {
@@ -487,10 +498,7 @@ pub(crate) fn messages(value: &Value) -> Check {
         ],
     )?;
     positive(object.get("max_tokens"))?;
-    if optional(object, "stream").is_some_and(|v| v != &Value::Bool(false)) {
-        return Err(());
-    }
-    scalars(object, &["temperature", "top_p", "top_k"], &[])?;
+    scalars(object, &["temperature", "top_p", "top_k"], &["stream"])?;
     cached(object)?;
     if let Some(value) = optional(object, "thinking") {
         thinking(value)?;

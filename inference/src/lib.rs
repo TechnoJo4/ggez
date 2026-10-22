@@ -6,7 +6,7 @@ mod policy;
 mod protocols;
 pub mod server;
 
-fn json_content_type(headers: &hyper::HeaderMap) -> bool {
+fn content_type(headers: &hyper::HeaderMap, expected: &str) -> bool {
     headers
         .get("content-type")
         .and_then(|value| value.to_str().ok())
@@ -16,7 +16,7 @@ fn json_content_type(headers: &hyper::HeaderMap) -> bool {
                 .next()
                 .unwrap_or("")
                 .trim()
-                .eq_ignore_ascii_case("application/json")
+                .eq_ignore_ascii_case(expected)
         })
 }
 
