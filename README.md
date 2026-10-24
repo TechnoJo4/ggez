@@ -27,7 +27,7 @@ blind outbound forwarding is only eligible for entirely read-only upstreams. oth
 
 bare names like `listen-port` / `listen-uds` are banned from configuration: it's very easy to fall into a situation where it's unclear what is listening and on what, argument names should fully identify whose socket/port they describe.
 
-all error cases should log something specific to that error case, alongside any error from a dependency.
+all error cases (or at least HTTP 5XXes + equivalents) should log something specific to that error case, alongside any error from a dependency. 4XX-equivalents should either return a clear message to the client or log.
 
 gateway-specific files stay with their gateway; shared files belong at the root. code and tests are the primary documentation.
 

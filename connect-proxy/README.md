@@ -27,7 +27,7 @@ specifically:
 - `git`: nixpkgs' Git builders bypass system Git config (including our `insteadOf` rewrites).
 - `github`:
   - nix's `github:` fetches and nixpkgs' archive fetches bypass Git.
-  - `nix-update` uses `/:owner/:repo/releases.atom` Atom feeds.
+  - `nix-update` uses `/:owner/:repo/releases.atom` and commit Atom feeds.
 - `github-api`: Nix resolves GitHub refs through the commit API.
 - `github-codeload`: GitHub redirects archive downloads here.
 - `forgejo`: nixpkgs' Codeberg/Gitea/Forgejo fetchers download archives without Git.
