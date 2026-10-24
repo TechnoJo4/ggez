@@ -11,5 +11,7 @@
   "pypi.org": { "policy": "pypi" },
   "files.pythonhosted.org": { "policy": "pypi-files" },
   "index.crates.io": { "policy": "cargo-index" },
-  "static.crates.io": { "policy": "cargo-files" }
+  "static.crates.io": { "policy": "cargo-files" },
+  "registry.npmjs.org": { "policy": "npm" },
+  "npm.jsr.io": { "policy": "npm" }
 }

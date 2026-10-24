@@ -6,6 +6,7 @@ mod github_api;
 mod github_codeload;
 mod gitlab;
 mod nix_cache;
+mod npm;
 mod pypi;
 mod pypi_files;
 mod sourcehut;
@@ -28,6 +29,7 @@ pub enum UpstreamConfig {
     Forgejo {},
     Gitlab {},
     NixCache {},
+    Npm {},
     Pypi {},
     PypiFiles {},
     Sourcehut {},
@@ -38,6 +40,7 @@ impl UpstreamConfig {
         matches!(
             self,
             Self::NixCache {}
+                | Self::Npm {}
                 | Self::Pypi {}
                 | Self::PypiFiles {}
                 | Self::CargoIndex {}
@@ -67,6 +70,7 @@ impl UpstreamConfig {
             Self::Forgejo {} => forgejo::authorize(uri),
             Self::Gitlab {} => gitlab::authorize(uri),
             Self::NixCache {} => nix_cache::authorize(uri),
+            Self::Npm {} => npm::authorize(uri),
             Self::Pypi {} => pypi::authorize(uri),
             Self::PypiFiles {} => pypi_files::authorize(uri),
             Self::Sourcehut {} => sourcehut::authorize(uri),
@@ -83,6 +87,7 @@ impl UpstreamConfig {
             Self::Sourcehut {} => sourcehut::redirects_to(host, next, next_host),
             Self::Git {}
             | Self::NixCache {}
+            | Self::Npm {}
             | Self::Pypi {}
             | Self::PypiFiles {}
             | Self::CargoIndex {}

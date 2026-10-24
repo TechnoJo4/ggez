@@ -40,6 +40,11 @@ fn command(program: &str, work: &Path) -> Command {
     if let Some(rustup) = std::env::var_os("RUSTUP_HOME") {
         command.env("RUSTUP_HOME", rustup);
     }
+    #[cfg(windows)]
+    {
+        command.env("SystemRoot", std::env::var_os("SystemRoot").unwrap());
+        command.env("USERPROFILE", work).env("APPDATA", work);
+    }
     command
 }
 
@@ -86,6 +91,7 @@ impl Drop for PackageClient {
     }
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn unmodified_pip_installs_a_wheel_and_reads_its_metadata_through_connect() {
     if !available("python3", &["-m", "pip", "--version"]) {
@@ -155,6 +161,7 @@ print(json.dumps([hashlib.sha256(wheel.read_bytes()).hexdigest(), hashlib.sha256
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn unmodified_cargo_fetches_a_crates_io_dependency_through_connect() {
     if !available("cargo", &["--version"]) || !available("python3", &["--version"]) {
@@ -240,4 +247,196 @@ print(hashlib.sha256(pathlib.Path('fixture.crate').read_bytes()).hexdigest())
             .iter()
             .all(|r| r.1 == Method::GET && r.4.is_empty())
     );
+}
+
+const NPM: &str = if cfg!(windows) { "npm.cmd" } else { "npm" };
+
+fn npm_tarball(name: &str) -> Vec<u8> {
+    let gzip = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut tar = tar::Builder::new(gzip);
+    for (path, body) in [
+        (
+            "package/package.json",
+            serde_json::json!({"name": name, "version": "1.0.0", "main": "index.js"}).to_string(),
+        ),
+        (
+            "package/index.js",
+            "module.exports = 'through the package gateway';\n".into(),
+        ),
+    ] {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(body.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append_data(&mut header, path, body.as_bytes()).unwrap();
+    }
+    tar.into_inner().unwrap().finish().unwrap()
+}
+
+async fn javascript_install(program: &'static str) {
+    let mut client = PackageClient::new();
+    let packages = [
+        (
+            "registry.npmjs.org",
+            "ggez-fixture",
+            "/ggez-fixture/-/ggez-fixture-1.0.0.tgz",
+        ),
+        (
+            "registry.npmjs.org",
+            "@fixture/pkg",
+            "/@fixture/pkg/-/pkg-1.0.0.tgz",
+        ),
+        (
+            "npm.jsr.io",
+            "@jsr/fixture__pkg",
+            "/~/11/@jsr/fixture__pkg/1.0.0.tgz",
+        ),
+    ];
+    let mut routes = HashMap::new();
+    for (host, name, file) in packages {
+        let manifest = serde_json::json!({
+            "name": name,
+            "dist-tags": {"latest": "1.0.0"},
+            "versions": {"1.0.0": {
+                "name": name, "version": "1.0.0",
+                "dist": {"tarball": format!("https://{host}{file}")}
+            }}
+        })
+        .to_string()
+        .into_bytes();
+        // npm and Bun use different spellings for scoped metadata URLs.
+        for path in [format!("/{name}"), format!("/{}", name.replace('/', "%2f"))] {
+            routes.insert(
+                (host.into(), path),
+                ("application/json".into(), manifest.clone()),
+            );
+        }
+        routes.insert(
+            (host.into(), file.into()),
+            ("application/octet-stream".into(), npm_tarball(name)),
+        );
+    }
+    let origin = Origin::with_routes(routes).await;
+    fs::write(
+        client.work.join("package.json"),
+        serde_json::json!({
+            "name": "gateway-client", "version": "1.0.0", "private": true,
+            "dependencies": {
+                "ggez-fixture": "^1.0.0",
+                "@fixture/pkg": "^1.0.0",
+                "@fixture/jsr": "npm:@jsr/fixture__pkg@^1.0.0"
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    fs::write(
+        client.work.join(".npmrc"),
+        "@jsr:registry=https://npm.jsr.io\naudit=false\n",
+    )
+    .unwrap();
+    let proxy = client.proxy(&origin).await;
+    let work = client.work.clone();
+    tokio::task::spawn_blocking(move || {
+        let install = |directory: &Path, locked: bool| {
+            let mut install = command(program, directory);
+            if program == NPM {
+                install
+                    .args([
+                        if locked { "ci" } else { "install" },
+                        "--ignore-scripts",
+                        "--no-fund",
+                    ])
+                    .env("npm_config_cache", directory.join("cache"))
+                    .env("npm_config_update_notifier", "false")
+                    .env("npm_config_fetch_retries", "0")
+                    .env("npm_config_fetch_timeout", "5000");
+            } else {
+                install
+                    .args(["install", "--ignore-scripts"])
+                    .env("BUN_INSTALL_CACHE_DIR", directory.join("cache"));
+                if locked {
+                    install.arg("--frozen-lockfile");
+                }
+            }
+            checked(
+                install
+                    .env("https_proxy", &proxy)
+                    .env("NODE_EXTRA_CA_CERTS", work.join("ca.crt")),
+            );
+            for package in ["ggez-fixture", "@fixture/pkg", "@fixture/jsr"] {
+                assert!(
+                    fs::read_to_string(
+                        directory
+                            .join("node_modules")
+                            .join(package)
+                            .join("index.js")
+                    )
+                    .unwrap()
+                    .contains("through the package gateway")
+                );
+            }
+        };
+        install(&work, false);
+        // A fresh directory and cache prove the lockfile's absolute URLs work too.
+        let locked = work.join("locked");
+        fs::create_dir(&locked).unwrap();
+        for file in [
+            "package.json",
+            ".npmrc",
+            if program == NPM {
+                "package-lock.json"
+            } else {
+                "bun.lock"
+            },
+        ] {
+            fs::copy(work.join(file), locked.join(file)).unwrap();
+        }
+        install(&locked, true);
+    })
+    .await
+    .unwrap();
+    let requests = origin.requests.lock().unwrap();
+    for (host, name, file) in packages {
+        let metadata = format!("/{name}");
+        let escaped = format!("/{}", name.replace('/', "%2f"));
+        assert!(
+            requests
+                .iter()
+                .any(|r| r.0 == host && (r.2 == metadata || r.2 == escaped)),
+            "missing metadata for {name}"
+        );
+        assert!(
+            requests
+                .iter()
+                .filter(|r| r.0 == host && r.2 == file)
+                .count()
+                >= 2,
+            "missing cold lockfile fetch for {name}"
+        );
+    }
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.1 == Method::GET && r.4.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn unmodified_npm_installs_npm_and_jsr_packages_and_uses_the_lockfile_through_connect() {
+    if available(NPM, &["--version"]) {
+        javascript_install(NPM).await;
+    }
+}
+
+#[tokio::test]
+async fn unmodified_bun_installs_npm_and_jsr_packages_and_uses_the_lockfile_through_connect() {
+    // Bun is optional locally and in the image; npm is required by PACKAGE_TEST_REQUIRED.
+    if Command::new("bun")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        javascript_install("bun").await;
+    }
 }

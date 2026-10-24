@@ -29,6 +29,35 @@ fn allowed() -> Vec<(&'static str, String)> {
             "static.crates.io",
             "/crates/MyCrate/MyCrate-1.0.0-rc.1+build.crate".into(),
         ),
+        ("registry.npmjs.org", "/ggez-fixture".into()),
+        ("registry.npmjs.org", "/ggez-fixture/latest".into()),
+        ("registry.npmjs.org", "/ggez-fixture/1.0.0".into()),
+        ("registry.npmjs.org", "/@fixture/pkg".into()),
+        ("registry.npmjs.org", "/@fixture%2fpkg".into()),
+        ("registry.npmjs.org", "/@fixture%2Fpkg/next".into()),
+        (
+            "registry.npmjs.org",
+            "/@fixture/pkg/1.0.0-rc.1+build".into(),
+        ),
+        (
+            "registry.npmjs.org",
+            "/ggez-fixture/-/ggez-fixture-1.0.0.tgz".into(),
+        ),
+        (
+            "registry.npmjs.org",
+            "/@fixture/pkg/-/pkg-1.0.0-rc.1+build.tgz".into(),
+        ),
+        (
+            "registry.npmjs.org",
+            "/@fixture%2fpkg/-/pkg-1.0.0.tgz".into(),
+        ),
+        ("npm.jsr.io", "/@jsr/fixture__pkg".into()),
+        ("npm.jsr.io", "/@jsr%2ffixture__pkg".into()),
+        ("npm.jsr.io", "/~/11/@jsr/fixture__pkg/1.0.0.tgz".into()),
+        (
+            "npm.jsr.io",
+            "/~/12/@jsr/fixture__pkg/1.0.0-rc.1+build.tgz".into(),
+        ),
     ]
 }
 
@@ -87,7 +116,147 @@ fn denied() -> Vec<(&'static str, String)> {
             "/crates/my_crate/1.0.0/download?x=1".into(),
         ),
         ("static.crates.io", "/api/v1/crates/new".into()),
+        ("registry.npmjs.org", "/".into()),
+        ("registry.npmjs.org", "/-/".into()),
+        ("registry.npmjs.org", "/-/user/org.couchdb.user:lia".into()),
+        (
+            "registry.npmjs.org",
+            "/-/npm/v1/security/advisories/bulk".into(),
+        ),
+        (
+            "registry.npmjs.org",
+            "/-/npm/v1/security/audits/quick".into(),
+        ),
+        ("registry.npmjs.org", "/-/package/pkg/dist-tags".into()),
+        ("registry.npmjs.org", "/-/v1/search?text=pkg".into()),
+        ("registry.npmjs.org", "/pkg?write=true".into()),
+        ("registry.npmjs.org", "/pkg/".into()),
+        ("registry.npmjs.org", "/pkg/..".into()),
+        ("registry.npmjs.org", "/pkg/%2e%2e".into()),
+        ("registry.npmjs.org", "/pkg/-rev/1-abc".into()),
+        ("registry.npmjs.org", "/pkg/-/other-1.0.0.tgz".into()),
+        ("registry.npmjs.org", "/pkg/-/pkg-../admin.tgz".into()),
+        ("registry.npmjs.org", "/pkg/-/pkg-%31.0.0.tgz".into()),
+        ("registry.npmjs.org", "/pkg/-/pkg-1.0.0.tgz?x=1".into()),
+        ("registry.npmjs.org", "/pkg%2fadmin".into()),
+        ("registry.npmjs.org", "/@fixture%252fpkg".into()),
+        ("registry.npmjs.org", "/@fixture%2fpkg%2fadmin".into()),
+        ("registry.npmjs.org", "/@fixture%2f..".into()),
+        ("registry.npmjs.org", "/@fixture/%2e%2e".into()),
+        ("registry.npmjs.org", "/@fixture%5cpkg".into()),
+        ("registry.npmjs.org", "/@fixture//pkg".into()),
+        ("registry.npmjs.org", "/@fixture/pkg/extra/file".into()),
+        ("npm.jsr.io", "/~/11/@jsr/fixture__pkg/../meta.json".into()),
+        ("npm.jsr.io", "/~/11/@jsr/fixture__pkg/%2e%2e.tgz".into()),
+        ("npm.jsr.io", "/~/11/@jsr/fixture__pkg/1.0.0.tgz?x=1".into()),
+        ("npm.jsr.io", "/~/x/@jsr/fixture__pkg/1.0.0.tgz".into()),
+        ("npm.jsr.io", "/~/11/@other/fixture__pkg/1.0.0.tgz".into()),
+        ("npm.jsr.io", "/~/11/@jsr/pkg/1.0.0.tgz".into()),
+        ("npm.jsr.io", "/~/11/@jsr/__pkg/1.0.0.tgz".into()),
+        ("npm.jsr.io", "/api/scopes/fixture/packages/pkg".into()),
+        ("registry.npmjs.org", format!("/{}", "a".repeat(215))),
+        (
+            "registry.npmjs.org",
+            format!("/@{}/{}", "a".repeat(106), "b".repeat(107)),
+        ),
     ]
+}
+
+#[tokio::test]
+async fn npm_metadata_and_tarballs_strip_credentials_and_cannot_redirect() {
+    let reads = [
+        ("registry.npmjs.org", "/@fixture%2fpkg", "application/json"),
+        (
+            "registry.npmjs.org",
+            "/@fixture/pkg/-/pkg-1.0.0.tgz",
+            "application/octet-stream",
+        ),
+        ("npm.jsr.io", "/@jsr/fixture__pkg", "application/json"),
+        (
+            "npm.jsr.io",
+            "/~/11/@jsr/fixture__pkg/1.0.0.tgz",
+            "application/octet-stream",
+        ),
+    ];
+    let origin = Origin::with_routes(
+        reads
+            .iter()
+            .map(|(host, path, content_type)| {
+                (
+                    ((*host).into(), (*path).into()),
+                    ((*content_type).into(), b"fixture".to_vec()),
+                )
+            })
+            .collect(),
+    )
+    .await;
+    let gateway = origin.gateway();
+    for (host, path, _) in reads {
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: secret\r\nCookie: secret\r\nNpm-Session: secret\r\nNpm-Command: publish\r\nX-HTTP-Method-Override: DELETE\r\nAccept: text/html\r\nAccept-Encoding: gzip\r\nIf-None-Match: \"cached\"\r\n\r\n"
+        );
+        let reply = origin
+            .exchange(gateway.clone(), host, host, request.as_bytes())
+            .await
+            .unwrap();
+        assert!(
+            reply.starts_with(b"HTTP/1.1 200"),
+            "{}",
+            String::from_utf8_lossy(&reply)
+        );
+        assert!(!String::from_utf8_lossy(&reply).contains("host-secret"));
+        assert!(
+            gateway
+                .policy
+                .authorize(
+                    host,
+                    &Method::GET,
+                    &path.parse().unwrap(),
+                    &HeaderMap::new(),
+                    false
+                )
+                .is_err()
+        );
+        for location in [
+            format!("https://registry.npmjs.org{path}"),
+            "https://npm.jsr.io/~/11/@jsr/fixture__pkg/1.0.0.tgz".into(),
+            "https://unconfigured.example/pkg/-/pkg-1.0.0.tgz".into(),
+        ] {
+            let AuthorizedRequest::Http(read) = gateway
+                .policy
+                .authorize(
+                    host,
+                    &Method::GET,
+                    &path.parse().unwrap(),
+                    &HeaderMap::new(),
+                    true,
+                )
+                .unwrap()
+            else {
+                panic!()
+            };
+            assert!(read.redirect(&gateway.policy, &location).is_err());
+        }
+    }
+    let requests = origin.requests.lock().unwrap();
+    assert_eq!(requests.len(), reads.len());
+    for (_, _, path, headers, body) in requests.iter() {
+        for name in [
+            "authorization",
+            "cookie",
+            "npm-session",
+            "npm-command",
+            "x-http-method-override",
+        ] {
+            assert!(!headers.contains_key(name));
+        }
+        assert_eq!(headers["if-none-match"], "\"cached\"");
+        assert_eq!(headers["accept-encoding"], "identity");
+        if !path.ends_with(".tgz") {
+            assert_eq!(headers["accept"], "application/json");
+        }
+        assert!(body.is_empty());
+    }
 }
 
 #[test]
@@ -139,6 +308,10 @@ fn package_policies_only_authorize_their_registry_reads() {
         else {
             panic!()
         };
+        assert_eq!(read.url().path(), path);
+        if !path.ends_with(".tgz") && matches!(host, "registry.npmjs.org" | "npm.jsr.io") {
+            assert_eq!(read.headers()["accept"], "application/json");
+        }
         assert!(read.redirect(&policy, &path).is_err()); // Even same-host package redirects are denied.
         assert!(
             policy

@@ -32,7 +32,6 @@ mod nix;
 #[cfg(unix)]
 mod nix_cache;
 mod package_policy;
-#[cfg(unix)]
 mod packages;
 
 const REV: &str = "0123456789012345678901234567890123456789";
@@ -80,6 +79,8 @@ fn upstreams() -> Upstreams {
         ),
         ("index.crates.io".into(), UpstreamConfig::CargoIndex {}),
         ("static.crates.io".into(), UpstreamConfig::CargoFiles {}),
+        ("registry.npmjs.org".into(), UpstreamConfig::Npm {}),
+        ("npm.jsr.io".into(), UpstreamConfig::Npm {}),
     ])
 }
 
@@ -303,6 +304,8 @@ impl Origin {
                                 host.as_str(),
                                 "pypi.org"
                                     | "files.pythonhosted.org"
+                                    | "registry.npmjs.org"
+                                    | "npm.jsr.io"
                                     | "index.crates.io"
                                     | "static.crates.io"
                             ) {

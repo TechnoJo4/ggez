@@ -34,5 +34,6 @@ specifically:
 - `gitlab`: Nix's `gitlab:` and nixpkgs' GitLab fetchers use the HTTP API.
 - `sourcehut`: Nix's `sourcehut:` and nixpkgs' SourceHut fetchers use HTTP refs/archives.
 - `nix-cache`: Nix cache transport consolidated here to avoid a separate gateway.
-- `pypi`, `pypi-files`: pip follows package index links to a separate artifact host; CONNECT preserves those URLs.
-- `cargo-index`, `cargo-files`: Cargo's sparse index specifies a separate artifact host; CONNECT preserves its download URLs.
+- `pypi`, `pypi-files`: pip package index and its separate artifact host.
+- `cargo-index`, `cargo-files`: Cargo's sparse index and its separate artifact host.
+- `npm`: npm-compatible clients and lockfiles use absolute tarball URLs.
