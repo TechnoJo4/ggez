@@ -19,12 +19,16 @@ after a re-deploy, run `nix run . -- /etc/nixos/gateways` (ensuring `./gateways/
 
 review surface and code clarity are of the utmost importance.
 
+use a subagent to conduct an audit for every change, use one for an ontology review for every major change.
+
 the only people who'll use this are me and you, and we will both read the code. document only when it can't go or isn't clear in the code. documentation should never duplicate deployment configuration -- "examples" will only confuse both of us when production inevitably drifts away.
 
 blind outbound forwarding is only eligible for entirely read-only upstreams. otherwise expose reviewed read operations through a protocol-aware gateway.
 
 bare names like `listen-port` / `listen-uds` are banned from configuration: it's very easy to fall into a situation where it's unclear what is listening and on what, argument names should fully identify whose socket/port they describe.
 
+all error cases should log something specific to that error case, alongside any error from a dependency.
+
 gateway-specific files stay with their gateway; shared files belong at the root. code and tests are the primary documentation.
 
-it is recommended to use a subagent to conduct an audit for every change, and to additionally use one for an ontology review for every major change.
+do not write change-detector tests -- avoid tests for behavior of dependencies, for specific strings in logs, errors, responses, etc.
