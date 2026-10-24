@@ -124,6 +124,40 @@ fn connect_only_admits_exact_whitelisted_authorities_without_bodies() {
 }
 
 #[test]
+fn npm_connect_metadata_does_not_change_authority_or_allow_a_body() {
+    let policy = Policy::new(upstreams()).unwrap();
+    // npm 11 copies package request metadata onto CONNECT as well as the TLS request.
+    let head = "CONNECT npm.jsr.io:443 HTTP/1.1\r\nHost: npm.jsr.io:443\r\nUser-Agent: npm/11.12.1\r\nPacote-Version: 21.5.0\r\nPacote-Req-Type: packument\r\nPacote-Pkg-Id: registry:@jsr/fixture__pkg\r\nPacote-Integrity: sha512-fixture\r\nAccept: application/json\r\nNpm-Auth-Type: web\r\nNpm-Command: install\r\nNpm-Scope: @fixture\r\nNpm-Session: fixture\r\nProxy-Connection: Keep-Alive\r\n";
+    assert_eq!(
+        connect_host(format!("{head}\r\n").as_bytes(), &policy).unwrap(),
+        "npm.jsr.io"
+    );
+    for header in [
+        "Host: registry.npmjs.org:443",
+        "Content-Length: 1",
+        "Transfer-Encoding: chunked",
+        "Connection: upgrade",
+        "Upgrade: websocket",
+        "Proxy-Authorization: secret",
+        "X-HTTP-Method-Override: POST",
+    ] {
+        assert!(
+            connect_host(format!("{head}{header}\r\n\r\n").as_bytes(), &policy).is_err(),
+            "accepted {header}"
+        );
+    }
+    assert!(
+        connect_host(
+            format!("{head}\r\n")
+                .replace("npm.jsr.io", "unconfigured.example")
+                .as_bytes(),
+            &policy
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn forge_reads_and_redirects_have_an_explicit_operation_and_destination() {
     let policy = Policy::new(upstreams()).unwrap();
     let read = |host, path: &str| {

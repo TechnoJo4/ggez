@@ -56,7 +56,10 @@ pub(crate) fn connect_host(head: &[u8], policy: &Policy) -> Result<String, ()> {
                 }
             }
             "content-length" if header.value == b"0" => {}
-            "user-agent" | "accept" | "proxy-connection" => {}
+            // npm 11 repeats package metadata on CONNECT; it is never forwarded.
+            "user-agent" | "accept" | "proxy-connection" | "npm-auth-type" | "npm-command"
+            | "npm-scope" | "npm-session" | "pacote-version" | "pacote-req-type"
+            | "pacote-pkg-id" | "pacote-integrity" => {}
             _ => return Err(()),
         }
     }

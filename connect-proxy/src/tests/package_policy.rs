@@ -193,7 +193,7 @@ async fn npm_metadata_and_tarballs_strip_credentials_and_cannot_redirect() {
     let gateway = origin.gateway();
     for (host, path, _) in reads {
         let request = format!(
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: secret\r\nCookie: secret\r\nNpm-Session: secret\r\nNpm-Command: publish\r\nX-HTTP-Method-Override: DELETE\r\nAccept: text/html\r\nAccept-Encoding: gzip\r\nIf-None-Match: \"cached\"\r\n\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nAuthorization: secret\r\nCookie: secret\r\nNpm-Session: secret\r\nNpm-Command: publish\r\nNpm-Auth-Type: web\r\nNpm-Scope: @fixture\r\nPacote-Version: 21.5.0\r\nPacote-Req-Type: packument\r\nPacote-Pkg-Id: registry:@jsr/fixture__pkg\r\nPacote-Integrity: sha512-fixture\r\nX-HTTP-Method-Override: DELETE\r\nAccept: text/html\r\nAccept-Encoding: gzip\r\nIf-None-Match: \"cached\"\r\n\r\n"
         );
         let reply = origin
             .exchange(gateway.clone(), host, host, request.as_bytes())
@@ -246,6 +246,12 @@ async fn npm_metadata_and_tarballs_strip_credentials_and_cannot_redirect() {
             "cookie",
             "npm-session",
             "npm-command",
+            "npm-auth-type",
+            "npm-scope",
+            "pacote-version",
+            "pacote-req-type",
+            "pacote-pkg-id",
+            "pacote-integrity",
             "x-http-method-override",
         ] {
             assert!(!headers.contains_key(name));
