@@ -24,8 +24,10 @@ each policy/capability supported by this gateway MUST be listed below with the r
 
 specifically:
 
-- `git`: nixpkgs' Git builders bypass system Git config, including our URL rewrites.
-- `github`: Nix's `github:` fetches and nixpkgs' archive fetches bypass Git.
+- `git`: nixpkgs' Git builders bypass system Git config (including our `insteadOf` rewrites).
+- `github`:
+  - nix's `github:` fetches and nixpkgs' archive fetches bypass Git.
+  - `nix-update` uses `/:owner/:repo/releases.atom` Atom feeds.
 - `github-api`: Nix resolves GitHub refs through the commit API.
 - `github-codeload`: GitHub redirects archive downloads here.
 - `forgejo`: nixpkgs' Codeberg/Gitea/Forgejo fetchers download archives without Git.

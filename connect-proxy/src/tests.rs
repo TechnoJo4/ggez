@@ -366,6 +366,14 @@ impl Origin {
                                         }
                                     }
                                 }
+                            } else if host == "github.com" && path.ends_with(".atom") {
+                                *response.body_mut() = Full::new(Bytes::from_static(
+                                    b"<feed xmlns=\"http://www.w3.org/2005/Atom\"/>\n",
+                                ));
+                                response.headers_mut().insert(
+                                    "content-type",
+                                    "application/atom+xml".parse().unwrap(),
+                                );
                             } else if host == "api.github.com" {
                                 *response.body_mut() = Full::new(Bytes::from(format!(
                                     r#"{{"sha":"{REV}","commit":{{"tree":{{"sha":"{REV}"}}}}}}"#

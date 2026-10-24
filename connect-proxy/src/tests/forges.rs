@@ -16,6 +16,116 @@ fn authorize(
 }
 
 #[test]
+fn github_atom_feeds_only_admit_release_and_branch_reads() {
+    let policy = Policy::new(upstreams()).unwrap();
+    for path in [
+        "/org/repo/releases.atom",
+        "/org/repo/commits/main.atom",
+        "/org/repo/commits/feature/branch.atom",
+        "/org/repo/commits/release/v1.2-rc_1.atom",
+    ] {
+        let read = || match authorize(&policy, "github.com", &Method::GET, path).unwrap() {
+            AuthorizedRequest::Http(read) => read,
+            _ => panic!(),
+        };
+        assert_eq!(read().url().as_str(), format!("https://github.com{path}"));
+        assert_eq!(read().headers()["accept"], "application/atom+xml");
+        assert!(read().redirect(&policy, path).is_ok());
+        for location in [
+            path.replace("org", "other"),
+            "/org/repo/commits/other.atom".into(),
+            format!("https://api.github.com{path}"),
+            format!("/org/repo/archive/{REV}.tar.gz"),
+        ] {
+            assert!(
+                read().redirect(&policy, &location).is_err(),
+                "followed {location}"
+            );
+        }
+        for method in [Method::HEAD, Method::POST, Method::PUT, Method::DELETE] {
+            assert!(authorize(&policy, "github.com", &method, path).is_err());
+        }
+        assert!(authorize(&policy, "api.github.com", &Method::GET, path).is_err());
+    }
+    for path in [
+        "/org/repo/releases",
+        "/org/repo/releases.atom/extra",
+        "/org/repo/releases.atom?method=delete",
+        "/org/repo/commits.atom",
+        "/org/repo/commits/main",
+        "/org/repo/commits/.atom",
+        "/org/repo/commits/..atom",
+        "/org/repo/commits/...atom",
+        "/org/repo/commits//main.atom",
+        "/org/repo/commits/../main.atom",
+        "/org/repo/commits/%2e%2e/main.atom",
+        "/org/repo/commits/feature%2Fbranch.atom",
+        "/org/repo/commits/main.atom/extra",
+        "/org/repo/commits/main.atom?path=secret",
+        "/org/repo/issues.atom",
+    ] {
+        assert!(
+            authorize(&policy, "github.com", &Method::GET, path).is_err(),
+            "accepted {path}"
+        );
+    }
+    let plain = Policy::new(Upstreams::from([(
+        "github.com".into(),
+        UpstreamConfig::Git {},
+    )]))
+    .unwrap();
+    assert!(
+        authorize(
+            &plain,
+            "github.com",
+            &Method::GET,
+            "/org/repo/releases.atom"
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn github_atom_feeds_pass_through_tls_with_conditional_headers() {
+    let origin = Origin::new().await;
+    for path in [
+        "/org/repo/releases.atom",
+        "/org/repo/commits/feature/branch.atom",
+    ] {
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: github.com\r\nAccept: text/html\r\nIf-None-Match: \"feed-etag\"\r\nIf-Modified-Since: Wed, 21 Oct 2015 07:28:00 GMT\r\nAuthorization: secret\r\nCookie: secret\r\n\r\n"
+        );
+        let reply = origin
+            .exchange(
+                origin.gateway(),
+                "github.com",
+                "github.com",
+                request.as_bytes(),
+            )
+            .await
+            .unwrap();
+        let reply = String::from_utf8_lossy(&reply);
+        assert!(reply.starts_with("HTTP/1.1 200"), "{reply}");
+        assert!(
+            reply.contains("content-type: application/atom+xml"),
+            "{reply}"
+        );
+        assert!(
+            reply.contains("<feed xmlns=\"http://www.w3.org/2005/Atom\"/>"),
+            "{reply}"
+        );
+        let records = origin.requests.lock().unwrap();
+        let last = records.last().unwrap();
+        assert_eq!((&*last.0, &*last.2), ("github.com", path));
+        assert_eq!(last.3["accept"], "application/atom+xml");
+        assert_eq!(last.3["if-none-match"], "\"feed-etag\"");
+        assert_eq!(last.3["if-modified-since"], "Wed, 21 Oct 2015 07:28:00 GMT");
+        assert!(!last.3.contains_key("authorization"));
+        assert!(!last.3.contains_key("cookie"));
+    }
+}
+
+#[test]
 fn forge_routes_accept_nix_selectors_without_admitting_other_api_capabilities() {
     let policy = Policy::new(upstreams()).unwrap();
     for (host, path) in [
