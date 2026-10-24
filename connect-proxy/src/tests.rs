@@ -158,6 +158,52 @@ fn npm_connect_metadata_does_not_change_authority_or_allow_a_body() {
 }
 
 #[test]
+fn pnpm_connect_accepts_default_https_host_without_relaxing_authority_or_framing() {
+    let policy = Policy::new(upstreams()).unwrap();
+    // Captured from pnpm 11.27's install-time proxy request.
+    let head = "CONNECT registry.npmjs.org:443 HTTP/1.1\r\nhost: registry.npmjs.org\r\nconnection: close\r\nproxy-connection: keep-alive\r\n";
+    for connection in ["close", "keep-alive", "CLOSE"] {
+        let request = format!(
+            "{}\r\n",
+            head.replace("connection: close", &format!("connection: {connection}"))
+        );
+        assert_eq!(
+            connect_host(request.as_bytes(), &policy).unwrap(),
+            "registry.npmjs.org"
+        );
+    }
+    for host in [
+        "registry.npmjs.org:80",
+        "npm.jsr.io",
+        "registry.npmjs.org.evil",
+    ] {
+        let request = format!(
+            "{}\r\n",
+            head.replace("host: registry.npmjs.org\r\n", &format!("host: {host}\r\n"))
+        );
+        assert!(
+            connect_host(request.as_bytes(), &policy).is_err(),
+            "accepted {host}"
+        );
+    }
+    for header in [
+        "Host: registry.npmjs.org",
+        "Content-Length: 1",
+        "Transfer-Encoding: chunked",
+        "Connection: upgrade",
+        "Connection: close, x-extra",
+        "Upgrade: websocket",
+        "Proxy-Authorization: secret",
+        "X-HTTP-Method-Override: POST",
+    ] {
+        assert!(
+            connect_host(format!("{head}{header}\r\n\r\n").as_bytes(), &policy).is_err(),
+            "accepted {header}"
+        );
+    }
+}
+
+#[test]
 fn forge_reads_and_redirects_have_an_explicit_operation_and_destination() {
     let policy = Policy::new(upstreams()).unwrap();
     let read = |host, path: &str| {

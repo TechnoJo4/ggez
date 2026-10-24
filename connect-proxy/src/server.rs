@@ -56,10 +56,13 @@ pub(crate) fn connect_host(head: &[u8], policy: &Policy) -> Result<String, ()> {
         match header.name.to_ascii_lowercase().as_str() {
             "host" => {
                 host_count += 1;
-                if header.value != authority.as_bytes() {
+                if header.value != authority.as_bytes() && header.value != host.as_bytes() {
                     return Err(());
                 }
             }
+            "connection"
+                if header.value.eq_ignore_ascii_case(b"close")
+                    || header.value.eq_ignore_ascii_case(b"keep-alive") => {}
             "content-length" if header.value == b"0" => {}
             // npm 11 repeats package metadata on CONNECT; it is never forwarded.
             "user-agent" | "accept" | "proxy-connection" | "npm-auth-type" | "npm-command"
