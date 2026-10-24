@@ -34,24 +34,28 @@ struct JsonBody {
     response: Pin<Box<dyn Future<Output = io::Result<Bytes>> + Send>>,
     heartbeat: tokio::time::Interval,
     finished: bool,
+    context: String,
 }
 
 impl JsonBody {
-    fn new(mut upstream: reqwest::Response, limit: usize) -> Self {
+    fn new(mut upstream: reqwest::Response, limit: usize, context: String) -> Self {
         let response = Box::pin(async move {
             let mut bytes = Vec::new();
             while let Some(chunk) = upstream
                 .chunk()
                 .await
-                .map_err(|_| io::Error::other("inference response failed"))?
+                .map_err(|cause| io::Error::other(cause.without_url()))?
             {
                 if chunk.len() > limit.saturating_sub(bytes.len()) {
-                    return Err(io::Error::other("inference response exceeds size bound"));
+                    return Err(io::Error::other(format!(
+                        "inference response exceeds {limit} byte size bound"
+                    )));
                 }
                 bytes.extend_from_slice(&chunk);
             }
-            let json: serde_json::Value = serde_json::from_slice(&bytes)
-                .map_err(|_| io::Error::other("invalid inference JSON response"))?;
+            let json: serde_json::Value = serde_json::from_slice(&bytes).map_err(|cause| {
+                io::Error::other(format!("invalid inference JSON response: {cause}"))
+            })?;
             if !json.is_object() {
                 return Err(io::Error::other("inference response must be a JSON object"));
             }
@@ -63,6 +67,7 @@ impl JsonBody {
             response,
             heartbeat,
             finished: false,
+            context,
         }
     }
 }
@@ -80,6 +85,13 @@ impl Body for JsonBody {
         }
         if let Poll::Ready(result) = self.response.as_mut().poll(cx) {
             self.finished = true;
+            if let Err(cause) = &result {
+                eprintln!(
+                    "inference: {}: response body failed: {}",
+                    self.context,
+                    host_runtime::error_chain(cause)
+                );
+            }
             return Poll::Ready(Some(result.map(Frame::data)));
         }
         match self.heartbeat.poll_tick(cx) {
@@ -89,10 +101,19 @@ impl Body for JsonBody {
     }
 }
 
-fn event_stream_body(upstream: reqwest::Response, mut limit: usize) -> ResponseBody {
+fn event_stream_body(
+    upstream: reqwest::Response,
+    mut limit: usize,
+    context: String,
+) -> ResponseBody {
     let frames = upstream.bytes_stream().map(move |chunk| {
-        let chunk = chunk.map_err(|_| io::Error::other("inference response failed"))?;
+        let chunk = chunk.map_err(|cause| {
+            let cause = cause.without_url();
+            eprintln!("inference: {context}: event stream failed: {}", host_runtime::error_chain(&cause));
+            io::Error::other(cause)
+        })?;
         if chunk.len() > limit {
+            eprintln!("inference: {context}: event stream exceeds size bound ({} byte chunk, {limit} bytes remaining)", chunk.len());
             return Err(io::Error::other("inference response exceeds size bound"));
         }
         limit -= chunk.len();
@@ -113,6 +134,11 @@ fn error(status: StatusCode) -> Response<ResponseBody> {
     response
 }
 
+fn bad_gateway(context: &str, cause: impl std::fmt::Display) -> Response<ResponseBody> {
+    eprintln!("inference: 502 {context}: {cause}");
+    error(StatusCode::BAD_GATEWAY)
+}
+
 async fn handle(
     gateway: Arc<Gateway>,
     request: Request<Incoming>,
@@ -131,13 +157,26 @@ async fn handle(
             Ok(request) => request,
             Err(status) => return Ok(error(status)),
         };
+    let context = format!("{} path={:?}", parts.method, parts.uri.path());
     let (upstream, response_kind) = match gateway.client.fetch(authorized).await {
         Ok(response) => response,
-        Err(_) => return Ok(error(StatusCode::BAD_GATEWAY)),
+        Err(cause) => return Ok(bad_gateway(&context, host_runtime::error_chain(&cause))),
     };
+    let context = format!(
+        "{context}, upstream host={:?} path={:?}, request-id={:?}",
+        upstream.url().host_str(),
+        upstream.url().path(),
+        upstream
+            .headers()
+            .get("x-request-id")
+            .or_else(|| upstream.headers().get("request-id"))
+    );
     let status = upstream.status();
     if status.is_redirection() || status == StatusCode::SWITCHING_PROTOCOLS {
-        return Ok(error(StatusCode::BAD_GATEWAY));
+        return Ok(bad_gateway(
+            &context,
+            format_args!("unsupported upstream status {status}"),
+        ));
     }
     let mut headers = hyper::HeaderMap::new();
     for name in ["content-type", "retry-after", "x-request-id", "request-id"] {
@@ -146,26 +185,58 @@ async fn handle(
         }
     }
     if status.is_client_error() || status.is_server_error() {
+        if status.is_server_error() {
+            eprintln!("inference: {status} {context}: upstream error");
+        }
         // Keep status/backoff semantics, without reflecting credential-bearing provider errors.
         let mut response = error(status);
         headers.remove("content-type");
         response.headers_mut().extend(headers);
         return Ok(response);
     }
-    if !crate::content_type(upstream.headers(), response_kind.content_type())
-        || upstream
-            .headers()
-            .get("content-encoding")
-            .is_some_and(|v| v != "identity")
-        || upstream
-            .content_length()
-            .is_some_and(|n| n > gateway.max_response_body as u64)
+    if !crate::content_type(upstream.headers(), response_kind.content_type()) {
+        return Ok(bad_gateway(
+            &context,
+            format_args!(
+                "invalid response content-type {:?}; expected {:?}",
+                upstream.headers().get("content-type"),
+                response_kind.content_type()
+            ),
+        ));
+    }
+    if upstream
+        .headers()
+        .get("content-encoding")
+        .is_some_and(|v| v != "identity")
     {
-        return Ok(error(StatusCode::BAD_GATEWAY));
+        return Ok(bad_gateway(
+            &context,
+            format_args!(
+                "unsupported response content-encoding {:?}",
+                upstream.headers().get("content-encoding")
+            ),
+        ));
+    }
+    if upstream
+        .content_length()
+        .is_some_and(|n| n > gateway.max_response_body as u64)
+    {
+        return Ok(bad_gateway(
+            &context,
+            format_args!(
+                "response content-length {:?} exceeds {} byte size bound",
+                upstream.content_length(),
+                gateway.max_response_body
+            ),
+        ));
     }
     let body = match response_kind {
-        ResponseKind::Json => JsonBody::new(upstream, gateway.max_response_body).boxed_unsync(),
-        ResponseKind::EventStream => event_stream_body(upstream, gateway.max_response_body),
+        ResponseKind::Json => {
+            JsonBody::new(upstream, gateway.max_response_body, context).boxed_unsync()
+        }
+        ResponseKind::EventStream => {
+            event_stream_body(upstream, gateway.max_response_body, context)
+        }
     };
     let mut response = Response::new(body);
     *response.status_mut() = status;
@@ -196,6 +267,7 @@ mod tests {
             response: Box::pin(async { Ok(receive.await.unwrap()) }),
             heartbeat: tokio::time::interval(Duration::from_secs(10)),
             finished: false,
+            context: "keepalive test".into(),
         };
         assert_eq!(
             body.frame().await.unwrap().unwrap().into_data().unwrap(),

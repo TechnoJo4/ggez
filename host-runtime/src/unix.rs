@@ -76,18 +76,53 @@ where
 {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
-        .build()?
+        .build()
+        .map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("could not initialize Tokio runtime: {error}"),
+            )
+        })?
         .block_on(async {
-            let listener = bind(&config.path).await?;
-            let meta = fs::symlink_metadata(&config.path)?;
+            let listener = bind(&config.path).await.map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not initialize listener {:?}: {error}", config.path),
+                )
+            })?;
+            let meta = fs::symlink_metadata(&config.path).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not stat listener {:?}: {error}", config.path),
+                )
+            })?;
             let _socket_file = SocketFile {
                 path: config.path,
                 device: meta.dev(),
                 inode: meta.ino(),
             };
-            fs::set_permissions(&_socket_file.path, fs::Permissions::from_mode(config.mode))?;
-            let mut terminate = signal(SignalKind::terminate())?;
-            let mut interrupt = signal(SignalKind::interrupt())?;
+            fs::set_permissions(&_socket_file.path, fs::Permissions::from_mode(config.mode))
+                .map_err(|error| {
+                    io::Error::new(
+                        error.kind(),
+                        format!(
+                            "could not set listener {:?} permissions to {:o}: {error}",
+                            _socket_file.path, config.mode
+                        ),
+                    )
+                })?;
+            let mut terminate = signal(SignalKind::terminate()).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not install SIGTERM handler: {error}"),
+                )
+            })?;
+            let mut interrupt = signal(SignalKind::interrupt()).map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not install SIGINT handler: {error}"),
+                )
+            })?;
             let mut sessions = JoinSet::new();
             loop {
                 tokio::select! {
@@ -104,7 +139,7 @@ where
                         let session = handle(stream);
                         sessions.spawn(async move {
                             if let Err(error) = session.await {
-                                eprintln!("{name}: {error}");
+                                eprintln!("{name}: {}", crate::error_chain(&error));
                             }
                         });
                     }

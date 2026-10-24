@@ -32,6 +32,11 @@ fn error(status: StatusCode) -> Response<ResponseBody> {
     response
 }
 
+fn bad_gateway(context: &str, cause: impl std::fmt::Display) -> Response<ResponseBody> {
+    eprintln!("connect-proxy: 502 {context}: {cause}");
+    error(StatusCode::BAD_GATEWAY)
+}
+
 pub(crate) fn connect_host(head: &[u8], policy: &Policy) -> Result<String, ()> {
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut request = httparse::Request::new(&mut headers);
@@ -98,6 +103,11 @@ async fn handle(
         AuthorizedRequest::Git(read) => Some(read.operation()),
         _ => None,
     };
+    let context = format!(
+        "{} host={host:?} path={:?}",
+        request.method(),
+        request.uri().path()
+    );
     let body = if git_operation == Some(git_policy::Operation::UploadPack) {
         match Limited::new(request.into_body(), gateway.max_body)
             .collect()
@@ -116,26 +126,35 @@ async fn handle(
         .await
     {
         Ok(response) => response,
-        Err(_) => return Ok(error(StatusCode::BAD_GATEWAY)),
+        Err(cause) => return Ok(bad_gateway(&context, host_runtime::error_chain(&cause))),
     };
+    let context = format!(
+        "{context}, upstream host={:?} path={:?}",
+        upstream.url().host_str(),
+        upstream.url().path()
+    );
     let status = upstream.status();
     if !matches!(
         status,
         StatusCode::OK | StatusCode::PARTIAL_CONTENT | StatusCode::NOT_MODIFIED
     ) || git_operation.is_some() && status != StatusCode::OK
     {
-        let mut response = error(if status.is_client_error() || status.is_server_error() {
+        let response_status = if status.is_client_error() || status.is_server_error() {
             status
         } else {
             StatusCode::BAD_GATEWAY
-        });
+        };
+        if response_status.is_server_error() {
+            eprintln!("connect-proxy: {response_status} {context}: upstream returned {status}");
+        }
+        let mut response = error(response_status);
         if let Some(value) = upstream.headers().get("retry-after") {
             response.headers_mut().insert("retry-after", value.clone());
         }
         return Ok(response);
     }
-    if git_operation.is_some_and(|operation| {
-        !upstream
+    if let Some(operation) = git_operation
+        && !upstream
             .headers()
             .get("content-type")
             .and_then(|v| v.to_str().ok())
@@ -146,8 +165,15 @@ async fn handle(
                     .trim()
                     .eq_ignore_ascii_case(operation.response_type())
             })
-    }) {
-        return Ok(error(StatusCode::BAD_GATEWAY));
+    {
+        return Ok(bad_gateway(
+            &context,
+            format_args!(
+                "invalid Git response content-type {:?}; expected {:?}",
+                upstream.headers().get("content-type"),
+                operation.response_type()
+            ),
+        ));
     }
     let mut headers = hyper::HeaderMap::new();
     for name in [
@@ -165,10 +191,15 @@ async fn handle(
             headers.insert(name, value.clone());
         }
     }
-    let frames = upstream.bytes_stream().map(|chunk| {
-        chunk
-            .map(Frame::data)
-            .map_err(|_| io::Error::other("upstream body failed"))
+    let frames = upstream.bytes_stream().map(move |chunk| {
+        chunk.map(Frame::data).map_err(|cause| {
+            let cause = cause.without_url();
+            eprintln!(
+                "connect-proxy: {context}: upstream body failed: {}",
+                host_runtime::error_chain(&cause)
+            );
+            io::Error::other(cause)
+        })
     });
     let mut response = Response::new(StreamBody::new(frames).boxed_unsync());
     *response.status_mut() = status;
@@ -215,11 +246,32 @@ where
             gateway.acceptors[&host].accept(stream),
         )
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TLS handshake deadline"))??;
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("TLS handshake deadline for host={host:?}"),
+            )
+        })?
+        .map_err(|cause| {
+            io::Error::new(
+                cause.kind(),
+                format!(
+                    "TLS handshake failed for host={host:?}: {}",
+                    host_runtime::error_chain(&cause)
+                ),
+            )
+        })?;
+        let context = format!("HTTP session for host={host:?}");
         host_runtime::http::connection(stream, move |request| {
             handle(gateway.clone(), host.clone(), request)
         })
         .await
+        .map_err(|cause| {
+            io::Error::new(
+                cause.kind(),
+                format!("{context}: {}", host_runtime::error_chain(&cause)),
+            )
+        })
     })
     .await
     .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "proxy session deadline"))?

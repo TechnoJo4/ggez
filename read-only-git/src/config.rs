@@ -1,6 +1,6 @@
 use crate::server::Gateway;
 use git_policy::{Client, Policy, Upstreams};
-use std::{collections::HashSet, ffi::OsString, fs::File, io::Read, path::PathBuf, time::Duration};
+use std::{collections::HashSet, ffi::OsString, path::PathBuf, time::Duration};
 
 pub const HELP: &str = "read-only-git
   --host-git-listener-uds PATH            listener Firecracker forwards guest requests to
@@ -72,22 +72,24 @@ impl Config {
         }
         let socket: PathBuf = socket.ok_or("missing --host-git-listener-uds")?;
         let config_file: PathBuf = config_file.ok_or("missing --host-upstreams-config")?;
-        if !socket.is_absolute() || !config_file.is_absolute() {
-            return Err("host socket and config paths must be absolute".into());
+        if !socket.is_absolute() {
+            return Err(format!(
+                "--host-git-listener-uds {socket:?}: path must be absolute"
+            ));
         }
-        let mut bytes = Vec::new();
-        File::open(config_file)
-            .and_then(|file| file.take(1024 * 1024 + 1).read_to_end(&mut bytes))
-            .map_err(|_| "could not read upstream config")?;
-        if bytes.len() > 1024 * 1024 {
-            return Err("upstream config exceeds size bound".into());
-        }
-        let upstreams: Upstreams = serde_json::from_slice(&bytes).map_err(
-            |_| "upstream config must map names to HTTPS bases or {url, redirect_bases}",
-        )?;
+        let bytes =
+            host_runtime::config::read_host_file(&config_file, "upstream config", 1024 * 1024)?;
+        let upstreams: Upstreams = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("invalid upstream config {config_file:?} (expected names mapped to HTTPS bases or {{url, redirect_bases}}): {error}"))?;
         let gateway = Gateway {
-            policy: Policy::new(upstreams)?,
-            client: Client::new(deadline)?,
+            policy: Policy::new(upstreams)
+                .map_err(|error| format!("invalid upstream config {config_file:?}: {error}"))?,
+            client: Client::new(deadline).map_err(|error| {
+                format!(
+                    "could not initialize git HTTPS client: {}",
+                    host_runtime::error_chain(&error)
+                )
+            })?,
             max_body,
         };
         Ok(Self {

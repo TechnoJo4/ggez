@@ -1,6 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::{ffi::OsString, io, process::ExitCode};
+use std::{error::Error, ffi::OsString, fmt::Write, io, process::ExitCode};
+
+pub mod config;
+
+// Some client builders display only "builder error" and keep the cause in source().
+pub fn error_chain(error: &(dyn Error + 'static)) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(error) = source {
+        let _ = write!(message, ": {error}");
+        source = error.source();
+    }
+    message
+}
 
 pub fn entry<C>(
     name: &str,

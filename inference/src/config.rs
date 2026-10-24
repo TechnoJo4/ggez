@@ -11,9 +11,7 @@ use serde::Deserialize;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     ffi::OsString,
-    fs::File,
-    io::Read,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Arc,
     time::Duration,
 };
@@ -68,51 +66,39 @@ pub enum Authentication {
     ApiKey { key_file: PathBuf },
 }
 
-fn read_bounded(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
-    if !path.is_absolute() {
-        return Err("host config and secret paths must be absolute".into());
-    }
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(limit + 1).read_to_end(&mut bytes))
-        .map_err(|_| "could not read host config or secret file")?;
-    if bytes.len() as u64 > limit {
-        return Err("host config or secret file exceeds size bound".into());
-    }
-    Ok(bytes)
-}
-
 impl EndpointConfig {
     fn load(self, protocol: Protocol) -> Result<Endpoint, String> {
         let (name, prefix, path) = match self.authentication {
             Authentication::Bearer { key_file } => ("authorization", "Bearer ", key_file),
             Authentication::ApiKey { key_file } => ("x-api-key", "", key_file),
         };
-        let key = read_bounded(&path, 16384)?;
+        let key = host_runtime::config::read_host_file(&path, "API key file", 16384)?;
         let key = std::str::from_utf8(&key)
-            .map_err(|_| "invalid API key file")?
+            .map_err(|error| format!("API key file {path:?}: not UTF-8: {error}"))?
             .trim();
         if key.is_empty() || !key.bytes().all(|b| b.is_ascii_graphic()) {
-            return Err("invalid API key file".into());
+            return Err(format!(
+                "API key file {path:?}: expected a nonempty key containing only printable ASCII without whitespace (after trimming)"
+            ));
         }
-        let mut secret =
-            HeaderValue::from_str(&format!("{prefix}{key}")).map_err(|_| "invalid API key")?;
+        let mut secret = HeaderValue::from_str(&format!("{prefix}{key}")).map_err(|error| {
+            format!("API key file {path:?}: invalid authentication header: {error}")
+        })?;
         secret.set_sensitive(true);
         let mut headers = HeaderMap::new();
         for (name, value) in self.headers {
-            let name =
-                HeaderName::from_bytes(name.as_bytes()).map_err(|_| "invalid host header name")?;
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|error| format!("invalid host header name {name:?}: {error}"))?;
             if reserved_header(name.as_str())
                 && !matches!(name.as_str(), "anthropic-version" | "anthropic-beta")
             {
-                return Err(
-                    "reserved host header; authentication must use its config field".into(),
-                );
+                return Err(format!(
+                    "reserved host header {name:?}; authentication must use its config field"
+                ));
             }
-            headers.insert(
-                name,
-                HeaderValue::from_str(&value).map_err(|_| "invalid host header value")?,
-            );
+            let value = HeaderValue::from_str(&value)
+                .map_err(|error| format!("invalid host header value for {name:?}: {error}"))?;
+            headers.insert(name, value);
         }
         headers.insert(name, secret);
         if matches!(protocol, Protocol::Messages) && !headers.contains_key("anthropic-version") {
@@ -120,10 +106,12 @@ impl EndpointConfig {
         }
         let mut guest_headers = Vec::new();
         for name in self.guest_headers {
-            let name =
-                HeaderName::from_bytes(name.as_bytes()).map_err(|_| "invalid guest header name")?;
+            let name = HeaderName::from_bytes(name.as_bytes())
+                .map_err(|error| format!("invalid guest header name {name:?}: {error}"))?;
             if reserved_header(name.as_str()) {
-                return Err("reserved guest header cannot be forwarded".into());
+                return Err(format!(
+                    "reserved guest header {name:?} cannot be forwarded"
+                ));
             }
             guest_headers.push(name);
         }
@@ -144,9 +132,9 @@ impl RegistryFile {
                     .bytes()
                     .all(|c| c.is_ascii_alphanumeric() || b"-_".contains(&c))
             {
-                return Err(
-                    "upstream names must be 1..=64 ASCII letters, digits, '-' or '_'".into(),
-                );
+                return Err(format!(
+                    "upstream {name:?}: names must be 1..=64 ASCII letters, digits, '-' or '_'"
+                ));
             }
             if upstream.models.as_ref().is_some_and(|models| {
                 models.is_empty()
@@ -154,29 +142,39 @@ impl RegistryFile {
                         .iter()
                         .any(|model| model.is_empty() || model.len() > 256)
             }) {
-                return Err(
-                    "model whitelist must contain nonempty model names up to 256 bytes".into(),
-                );
+                return Err(format!(
+                    "upstream {name:?}: model whitelist must contain nonempty model names up to 256 bytes"
+                ));
             }
             if upstream.completions.is_none() && upstream.messages.is_none() {
-                return Err("each upstream needs at least one endpoint".into());
+                return Err(format!(
+                    "upstream {name:?}: needs at least one endpoint (completions or messages)"
+                ));
             }
             let models: Option<Arc<HashSet<String>>> = upstream
                 .models
                 .map(|models| Arc::new(models.into_iter().collect()));
-            for (endpoint, protocol, suffix) in [
+            for (field, endpoint, protocol, suffix) in [
                 (
+                    "completions",
                     upstream.completions,
                     Protocol::Completions,
                     "v1/chat/completions",
                 ),
-                (upstream.messages, Protocol::Messages, "v1/messages"),
+                (
+                    "messages",
+                    upstream.messages,
+                    Protocol::Messages,
+                    "v1/messages",
+                ),
             ] {
                 if let Some(endpoint) = endpoint {
                     routes.insert(
                         format!("/{name}/{suffix}"),
                         Route {
-                            endpoint: Arc::new(endpoint.load(protocol)?),
+                            endpoint: Arc::new(endpoint.load(protocol).map_err(|error| {
+                                format!("upstream {name:?}, {field} endpoint: {error}")
+                            })?),
                             models: models.clone(),
                             protocol,
                         },
@@ -247,15 +245,21 @@ impl Config {
         }
         let socket: PathBuf = socket.ok_or("missing --host-inference-listener-uds")?;
         if !socket.is_absolute() {
-            return Err("inference socket path must be absolute".into());
+            return Err(format!(
+                "--host-inference-listener-uds {socket:?}: path must be absolute"
+            ));
         }
-        let registry: RegistryFile = serde_json::from_slice(&read_bounded(
-            &config_file.ok_or("missing --host-upstreams-config")?,
+        let config_file = config_file.ok_or("missing --host-upstreams-config")?;
+        let registry: RegistryFile = serde_json::from_slice(&host_runtime::config::read_host_file(
+            &config_file,
+            "upstream config",
             1024 * 1024,
         )?)
-        .map_err(|error| format!("invalid upstream config: {error}"))?;
+        .map_err(|error| format!("invalid upstream config {config_file:?}: {error}"))?;
         let gateway = Gateway {
-            policy: registry.load()?,
+            policy: registry
+                .load()
+                .map_err(|error| format!("upstream config {config_file:?}: {error}"))?,
             client: Client::new(deadline)?,
             max_body,
             max_response_body,

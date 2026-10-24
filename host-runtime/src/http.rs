@@ -22,5 +22,5 @@ where
         .header_read_timeout(Duration::from_secs(10));
     http.serve_connection(TokioIo::new(stream), service_fn(handle))
         .await
-        .map_err(|_| io::Error::other("HTTP connection failed"))
+        .map_err(io::Error::other)
 }

@@ -28,9 +28,19 @@ impl Client {
             .pool_max_idle_per_host(4)
             .user_agent("ggez-connect-proxy/0.1")
             .build()
-            .map_err(|_| "could not initialize HTTPS client")?;
+            .map_err(|error| {
+                format!(
+                    "could not initialize HTTPS client: {}",
+                    host_runtime::error_chain(&error)
+                )
+            })?;
         Ok(Self {
-            git: git_policy::Client::new(deadline)?,
+            git: git_policy::Client::new(deadline).map_err(|error| {
+                format!(
+                    "could not initialize git HTTPS client: {}",
+                    host_runtime::error_chain(&error)
+                )
+            })?,
             http,
         })
     }
@@ -52,23 +62,46 @@ impl Client {
                 .headers(read.headers().clone())
                 .send()
                 .await
-                .map_err(|_| io::Error::other("upstream request failed"))?;
+                .map_err(|error| io::Error::other(error.without_url()))?;
             if !response.status().is_redirection()
                 || response.status() == reqwest::StatusCode::NOT_MODIFIED
             {
                 return Ok(response);
             }
-            if hop == 3 || !matches!(response.status().as_u16(), 301 | 302 | 303 | 307 | 308) {
-                return Err(io::Error::other("unsupported HTTP redirect"));
+            let status = response.status();
+            if hop == 3 {
+                return Err(io::Error::other(format!(
+                    "HTTP redirect limit exceeded at host={:?} path={:?} (status {status})",
+                    read.url().host_str(),
+                    read.url().path()
+                )));
+            }
+            if !matches!(status.as_u16(), 301 | 302 | 303 | 307 | 308) {
+                return Err(io::Error::other(format!(
+                    "unsupported HTTP redirect status {status} at host={:?} path={:?}",
+                    read.url().host_str(),
+                    read.url().path()
+                )));
             }
             let location = response
                 .headers()
                 .get("location")
                 .and_then(|v| v.to_str().ok())
-                .ok_or_else(|| io::Error::other("missing HTTP redirect location"))?;
-            read = read
-                .redirect(policy, location)
-                .map_err(|_| io::Error::other("HTTP redirect left approved read routes"))?;
+                .ok_or_else(|| io::Error::other(format!("missing or invalid HTTP redirect Location (status {status}, host={:?} path={:?})", read.url().host_str(), read.url().path())))?;
+            // Omit credentials, query strings and fragments from redirect diagnostics.
+            let target = match read.url().join(location) {
+                Ok(url) => format!(
+                    "origin={:?} path={:?}",
+                    url.origin().ascii_serialization(),
+                    url.path()
+                ),
+                Err(error) => format!("invalid URL: {error}"),
+            };
+            read = read.redirect(policy, location).map_err(|_| {
+                io::Error::other(format!(
+                    "HTTP redirect left approved read routes: {target} (status {status})"
+                ))
+            })?;
         }
         unreachable!()
     }

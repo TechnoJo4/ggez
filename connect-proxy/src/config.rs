@@ -7,8 +7,6 @@ use crate::{
 use std::{
     collections::HashSet,
     ffi::OsString,
-    fs::File,
-    io::Read,
     path::{Path, PathBuf},
     time::Duration,
 };
@@ -40,18 +38,10 @@ pub struct Config {
     pub gateway: Gateway,
 }
 
-fn read(path: &Path) -> Result<String, String> {
-    if !path.is_absolute() {
-        return Err("host paths must be absolute".into());
-    }
-    let mut bytes = Vec::new();
-    File::open(path)
-        .and_then(|file| file.take(1024 * 1024 + 1).read_to_end(&mut bytes))
-        .map_err(|_| "could not read host config or CA file")?;
-    if bytes.len() > 1024 * 1024 {
-        return Err("host file exceeds size bound".into());
-    }
-    String::from_utf8(bytes).map_err(|_| "host file is not UTF-8".into())
+fn read(path: &Path, role: &str) -> Result<String, String> {
+    let bytes = host_runtime::config::read_host_file(path, role, 1024 * 1024)?;
+    String::from_utf8(bytes)
+        .map_err(|error| format!("{role} {path:?}: not UTF-8: {}", error.utf8_error()))
 }
 
 impl Config {
@@ -105,15 +95,22 @@ impl Config {
         }
         let socket: PathBuf = socket.ok_or("missing --host-proxy-listener-uds")?;
         if !socket.is_absolute() {
-            return Err("host listener path must be absolute".into());
+            return Err(format!(
+                "--host-proxy-listener-uds {socket:?}: path must be absolute"
+            ));
         }
+        let registry = registry.ok_or("missing --host-upstreams-config")?;
         let upstreams: Upstreams =
-            serde_json::from_str(&read(&registry.ok_or("missing --host-upstreams-config")?)?)
-                .map_err(|_| "invalid upstream policy config")?;
-        let policy = Policy::new(upstreams)?;
-        let certificate = read(&certificate.ok_or("missing --host-ca-certificate")?)?;
-        let signing_key = read(&signing_key.ok_or("missing --host-ca-signing-key")?)?;
-        let acceptors = tls::acceptors(&certificate, &signing_key, policy.hosts())?;
+            serde_json::from_str(&read(&registry, "upstream policy config")?)
+                .map_err(|error| format!("invalid upstream policy config {registry:?}: {error}"))?;
+        let policy = Policy::new(upstreams)
+            .map_err(|error| format!("invalid upstream policy config {registry:?}: {error}"))?;
+        let certificate_path = certificate.ok_or("missing --host-ca-certificate")?;
+        let signing_key_path = signing_key.ok_or("missing --host-ca-signing-key")?;
+        let certificate = read(&certificate_path, "CA certificate")?;
+        let signing_key = read(&signing_key_path, "CA signing key")?;
+        let acceptors = tls::acceptors(&certificate, &signing_key, policy.hosts())
+            .map_err(|error| format!("TLS initialization (CA certificate {certificate_path:?}, CA signing key {signing_key_path:?}): {error}"))?;
         let gateway = Gateway {
             policy,
             acceptors,

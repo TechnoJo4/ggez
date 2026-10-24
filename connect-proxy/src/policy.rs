@@ -190,7 +190,9 @@ impl Policy {
         let mut checked = HashMap::new();
         for (host, kind) in upstreams {
             if !hostname(&host) {
-                return Err("upstream keys must be lowercase DNS hostnames, without ports".into());
+                return Err(format!(
+                    "upstream {host:?}: keys must be lowercase DNS hostnames, without ports"
+                ));
             }
             let git = GitPolicy::new(&format!("https://{host}/"))?;
             checked.insert(host, Upstream { kind, git });

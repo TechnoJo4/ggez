@@ -44,7 +44,7 @@ impl Endpoint {
         headers: HeaderMap,
         guest_headers: Vec<HeaderName>,
     ) -> Result<Self, String> {
-        let url = Url::parse(url).map_err(|_| "invalid endpoint URL")?;
+        let url = Url::parse(url).map_err(|error| format!("invalid endpoint URL: {error}"))?;
         if url.scheme() != "https"
             || url.host_str().is_none()
             || !url.username().is_empty()
@@ -91,7 +91,12 @@ impl Client {
             .pool_max_idle_per_host(4)
             .user_agent("ggez-inference/0.1")
             .build()
-            .map_err(|_| "could not initialize inference HTTPS client")?;
+            .map_err(|error| {
+                format!(
+                    "could not initialize inference HTTPS client: {}",
+                    host_runtime::error_chain(&error)
+                )
+            })?;
         Ok(Self(client))
     }
 
@@ -120,7 +125,8 @@ impl Client {
             .body(body)
             .send()
             .await
-            .map_err(|_| io::Error::other("inference upstream request failed"))?;
+            // Config validation excludes credentials, query strings and fragments.
+            .map_err(io::Error::other)?;
         Ok((response, response_kind))
     }
 }

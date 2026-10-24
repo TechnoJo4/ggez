@@ -26,6 +26,11 @@ fn error(status: StatusCode) -> Response<ResponseBody> {
     response
 }
 
+fn bad_gateway(context: &str, cause: impl std::fmt::Display) -> Response<ResponseBody> {
+    eprintln!("read-only-git: 502 {context}: {cause}");
+    error(StatusCode::BAD_GATEWAY)
+}
+
 async fn handle(
     gateway: Arc<Gateway>,
     request: Request<Incoming>,
@@ -41,6 +46,13 @@ async fn handle(
         Err(status) => return Ok(error(status)),
     };
     let operation = authorized.operation();
+    let context = format!(
+        "{} path={:?}, upstream host={:?} path={:?}",
+        request.method(),
+        request.uri().path(),
+        authorized.url().host_str(),
+        authorized.url().path()
+    );
     let body = if operation == Operation::UploadPack {
         match Limited::new(request.into_body(), gateway.max_body)
             .collect()
@@ -55,15 +67,23 @@ async fn handle(
     };
     let upstream = match gateway.client.fetch(authorized, body).await {
         Ok(response) => response,
-        Err(_) => return Ok(error(StatusCode::BAD_GATEWAY)),
+        Err(cause) => return Ok(bad_gateway(&context, host_runtime::error_chain(&cause))),
     };
     let status = upstream.status();
     if status != StatusCode::OK {
-        let mut response = error(if status.is_client_error() || status.is_server_error() {
+        let response_status = if status.is_client_error() || status.is_server_error() {
             status
         } else {
             StatusCode::BAD_GATEWAY
-        });
+        };
+        if response_status.is_server_error() {
+            eprintln!(
+                "read-only-git: {response_status} {context}: upstream returned {status} from host={:?} path={:?}",
+                upstream.url().host_str(),
+                upstream.url().path()
+            );
+        }
+        let mut response = error(response_status);
         if let Some(value) = upstream.headers().get("retry-after") {
             response.headers_mut().insert("retry-after", value.clone());
         }
@@ -81,7 +101,14 @@ async fn handle(
                 .eq_ignore_ascii_case(operation.response_type())
         })
     {
-        return Ok(error(StatusCode::BAD_GATEWAY));
+        return Ok(bad_gateway(
+            &context,
+            format_args!(
+                "invalid Git response content-type {:?}; expected {:?}",
+                upstream.headers().get("content-type"),
+                operation.response_type()
+            ),
+        ));
     }
     let mut headers = hyper::HeaderMap::new();
     for name in [
@@ -95,10 +122,15 @@ async fn handle(
             headers.insert(name, value.clone());
         }
     }
-    let frames = upstream.bytes_stream().map(|chunk| {
-        chunk
-            .map(Frame::data)
-            .map_err(|_| io::Error::other("git upstream body failed"))
+    let frames = upstream.bytes_stream().map(move |chunk| {
+        chunk.map(Frame::data).map_err(|cause| {
+            let cause = cause.without_url();
+            eprintln!(
+                "read-only-git: {context}: upstream body failed: {}",
+                host_runtime::error_chain(&cause)
+            );
+            io::Error::other(cause)
+        })
     });
     let mut response = Response::new(StreamBody::new(frames).boxed_unsync());
     *response.headers_mut() = headers;
