@@ -46,15 +46,17 @@ services:
       - --host-bridge-listener-uds
       - "${HOST_BRIDGE_UDS_DIR}/ssh.sock"
 
-  tame-rpc-bridge:
+  dsh-bridge:
     <<: *guest-bridge
+    labels:
+      ggez.guest-tcp-port: "3080"
     command:
       - --guest-listener-vsock-port
-      - "6702"
+      - "3080"
       - --host-firecracker-vsock-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}"
       - --host-bridge-listener-uds
-      - "${HOST_BRIDGE_UDS_DIR}/tame-rpc.sock"
+      - "${HOST_BRIDGE_UDS_DIR}/dsh.sock"
 
   inference:
     <<: *gateway
