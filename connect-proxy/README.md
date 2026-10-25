@@ -37,3 +37,4 @@ specifically:
 - `pypi`, `pypi-files`: pip package index and its separate artifact host.
 - `cargo-index`, `cargo-files`: Cargo's sparse index and its separate artifact host.
 - `npm`: npm-compatible clients and lockfiles use absolute tarball URLs.
+- `sheetjs`: DeepSeek Harness pins an xlsx tarball distributed on SheetJS's CDN instead of the npm registry; only matching versioned xlsx tarball paths are allowed.

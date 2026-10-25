@@ -81,6 +81,7 @@ fn upstreams() -> Upstreams {
         ("static.crates.io".into(), UpstreamConfig::CargoFiles {}),
         ("registry.npmjs.org".into(), UpstreamConfig::Npm {}),
         ("npm.jsr.io".into(), UpstreamConfig::Npm {}),
+        ("cdn.sheetjs.com".into(), UpstreamConfig::Sheetjs {}),
     ])
 }
 

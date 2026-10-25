@@ -13,5 +13,6 @@
   "index.crates.io": { "policy": "cargo-index" },
   "static.crates.io": { "policy": "cargo-files" },
   "registry.npmjs.org": { "policy": "npm" },
-  "npm.jsr.io": { "policy": "npm" }
+  "npm.jsr.io": { "policy": "npm" },
+  "cdn.sheetjs.com": { "policy": "sheetjs" }
 }

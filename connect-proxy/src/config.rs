@@ -25,7 +25,7 @@ guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
 CONNECT only, to configured DNS hosts on port 443. TLS terminates here; no tunnels.
 policies: git; github, forgejo, gitlab, sourcehut (Git + forge reads);
           github-api, github-codeload (forge reads only); nix-cache (GET/HEAD cache reads).
-          pypi, pypi-files; cargo-index, cargo-files (GET/HEAD package reads).
+          pypi, pypi-files; cargo-index, cargo-files; npm, sheetjs (GET/HEAD package reads).
 leaf keys live in memory; certificates last up to one year, capped by CA expiry.
 stale listener sockets are replaced; active sockets and other files are refused.
 SIGINT/SIGTERM close sessions and unlink the listener socket.";

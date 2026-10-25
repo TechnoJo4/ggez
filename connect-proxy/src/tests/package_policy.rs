@@ -52,6 +52,8 @@ fn allowed() -> Vec<(&'static str, String)> {
             "/@fixture%2fpkg/-/pkg-1.0.0.tgz".into(),
         ),
         ("npm.jsr.io", "/@jsr/fixture__pkg".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20.3/xlsx-0.20.3.tgz".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.21.0/xlsx-0.21.0.tgz".into()),
         ("npm.jsr.io", "/@jsr%2ffixture__pkg".into()),
         ("npm.jsr.io", "/~/11/@jsr/fixture__pkg/1.0.0.tgz".into()),
         (
@@ -155,6 +157,17 @@ fn denied() -> Vec<(&'static str, String)> {
         ("npm.jsr.io", "/~/11/@jsr/__pkg/1.0.0.tgz".into()),
         ("npm.jsr.io", "/api/scopes/fixture/packages/pkg".into()),
         ("registry.npmjs.org", format!("/{}", "a".repeat(215))),
+        ("cdn.sheetjs.com", "/".into()),
+        ("cdn.sheetjs.com", "/xlsx-latest/xlsx-latest.tgz".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20.3/xlsx-0.20.4.tgz".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20.3/xlsx-0.20.3.js".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20.3/package.json".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20.3/../xlsx-0.20.3.tgz".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20.3/%2e%2e.tgz".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20.3/xlsx-0.20.3.tgz?x=1".into()),
+        ("cdn.sheetjs.com", "/xlsx-0..3/xlsx-0..3.tgz".into()),
+        ("cdn.sheetjs.com", "/xlsx-0.20/xlsx-0.20.tgz".into()),
+        ("cdn.sheetjs.com", "/cpexcel-1.0.0/cpexcel-1.0.0.tgz".into()),
         (
             "registry.npmjs.org",
             format!("/@{}/{}", "a".repeat(106), "b".repeat(107)),
@@ -163,7 +176,7 @@ fn denied() -> Vec<(&'static str, String)> {
 }
 
 #[tokio::test]
-async fn npm_metadata_and_tarballs_strip_credentials_and_cannot_redirect() {
+async fn package_metadata_and_tarballs_strip_credentials_and_cannot_redirect() {
     let reads = [
         ("registry.npmjs.org", "/@fixture%2fpkg", "application/json"),
         (
@@ -172,6 +185,11 @@ async fn npm_metadata_and_tarballs_strip_credentials_and_cannot_redirect() {
             "application/octet-stream",
         ),
         ("npm.jsr.io", "/@jsr/fixture__pkg", "application/json"),
+        (
+            "cdn.sheetjs.com",
+            "/xlsx-0.20.3/xlsx-0.20.3.tgz",
+            "application/octet-stream",
+        ),
         (
             "npm.jsr.io",
             "/~/11/@jsr/fixture__pkg/1.0.0.tgz",

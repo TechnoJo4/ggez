@@ -9,6 +9,7 @@ mod nix_cache;
 mod npm;
 mod pypi;
 mod pypi_files;
+mod sheetjs;
 mod sourcehut;
 
 use git_policy::{AuthorizedRead as GitRead, GitPolicy, clean_segment};
@@ -32,6 +33,7 @@ pub enum UpstreamConfig {
     Npm {},
     Pypi {},
     PypiFiles {},
+    Sheetjs {},
     Sourcehut {},
 }
 
@@ -43,6 +45,7 @@ impl UpstreamConfig {
                 | Self::Npm {}
                 | Self::Pypi {}
                 | Self::PypiFiles {}
+                | Self::Sheetjs {}
                 | Self::CargoIndex {}
                 | Self::CargoFiles {}
         )
@@ -73,6 +76,7 @@ impl UpstreamConfig {
             Self::Npm {} => npm::authorize(uri),
             Self::Pypi {} => pypi::authorize(uri),
             Self::PypiFiles {} => pypi_files::authorize(uri),
+            Self::Sheetjs {} => sheetjs::authorize(uri),
             Self::Sourcehut {} => sourcehut::authorize(uri),
         }
     }
@@ -90,6 +94,7 @@ impl UpstreamConfig {
             | Self::Npm {}
             | Self::Pypi {}
             | Self::PypiFiles {}
+            | Self::Sheetjs {}
             | Self::CargoIndex {}
             | Self::CargoFiles {} => false,
         }
