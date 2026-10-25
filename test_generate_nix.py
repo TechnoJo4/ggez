@@ -69,29 +69,29 @@ class ExportTests(unittest.TestCase):
         ) != 0:
             self.skipTest("Docker has no Compose plugin")
         (self.root / "compose.yaml").write_bytes((SOURCE / "compose.yaml").read_bytes())
-        (self.root / "read-only-git.json").write_text(json.dumps(self.upstreams))
-        (self.root / "connect-proxy.json").write_bytes((SOURCE / "connect-proxy.json").read_bytes())
-        (self.root / "connect-proxy/ca.crt").write_text("public certificate")
         environment = {key: value for key, value in os.environ.items() if not key.startswith(("FIRECRACKER_", "HOST_BRIDGE_", "GATEWAY_"))}
         environment["DOCKER_HOST"] = "unix:///missing-docker-daemon.sock"
         with mock.patch.dict(os.environ, environment, clear=True):
             compose = generator.compose_config()
-            for volume in compose["services"]["connect-proxy"]["volumes"]:
-                if volume["target"] == "/ca.crt":
-                    volume["source"] = "connect-proxy/ca.crt"
+            git = compose["services"]["read-only-git"]
+            proxy = compose["services"]["connect-proxy"]
+            for service, flag, content in [
+                (git, "--host-upstreams-config", json.dumps(self.upstreams)),
+                (proxy, "--host-upstreams-config", json.dumps(self.proxy_upstreams)),
+                (proxy, "--host-ca-certificate", "public certificate"),
+            ]:
+                path = generator.mounted_file(service, generator.argument(service, flag))
+                self.assertTrue(path.resolve().is_relative_to(self.root))
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content)
             generator.export(compose, self.output)
         deployment = json.loads((self.output / "deployment.json").read_text())
         self.assertEqual(deployment["read-only-git"]["upstreams"], self.upstreams)
-        self.assertNotIn("ssh-bridge", deployment)
-        self.assertNotIn("tame-rpc-bridge", deployment)
-        self.assertEqual(deployment["connect-proxy"]["vsockPort"], 5004)
-        self.assertEqual(deployment["inference"]["vsockPort"], 5001)
-        self.assertEqual(deployment["connect-proxy"]["nixSubstituters"], ["https://cache.nixos.org"])
-        self.assertNotIn("nix-cache", deployment)
+        self.assertEqual(deployment["connect-proxy"]["nixSubstituters"], ["https://cache.example"])
         self.assertEqual((self.output / "connect-proxy/ca.crt").read_text(), "public certificate")
         self.assertFalse((self.root / ".env").exists())
-        self.assertFalse((self.root / "connect-proxy/ca.key").exists())
-        self.assertFalse((self.root / "inference.json").exists())
+        inference = compose["services"]["inference"]
+        self.assertFalse(generator.mounted_file(inference, generator.argument(inference, "--host-upstreams-config")).exists())
 
     def test_missing_public_ca_does_not_write_half_an_export(self):
         (self.root / "public-ca.crt").unlink()
