@@ -26,7 +26,7 @@ pub const HELP: &str = "inference
   --request-timeout-seconds N            request + response deadline (default 3600)
 
 guest -> host: create listener at <Firecracker uds_path>_<guest-dialed port>.
-routes: /NAME/v1/chat/completions and /NAME/v1/messages, when configured.
+routes: /NAME/[v1/]chat/completions and /NAME/[v1/]messages, when configured.
 endpoints are required; models is an optional whitelist (omitted allows all).
 keys are read from host-only files.
 no gateway rate limiting; upstream 429 and Retry-After are forwarded.
@@ -159,26 +159,29 @@ impl RegistryFile {
                     "completions",
                     upstream.completions,
                     Protocol::Completions,
-                    "v1/chat/completions",
+                    "chat/completions",
                 ),
                 (
                     "messages",
                     upstream.messages,
                     Protocol::Messages,
-                    "v1/messages",
+                    "messages",
                 ),
             ] {
                 if let Some(endpoint) = endpoint {
-                    routes.insert(
-                        format!("/{name}/{suffix}"),
-                        Route {
-                            endpoint: Arc::new(endpoint.load(protocol).map_err(|error| {
-                                format!("upstream {name:?}, {field} endpoint: {error}")
-                            })?),
-                            models: models.clone(),
-                            protocol,
-                        },
-                    );
+                    let endpoint = Arc::new(endpoint.load(protocol).map_err(|error| {
+                        format!("upstream {name:?}, {field} endpoint: {error}")
+                    })?);
+                    for prefix in ["", "v1/"] {
+                        routes.insert(
+                            format!("/{name}/{prefix}{suffix}"),
+                            Route {
+                                endpoint: endpoint.clone(),
+                                models: models.clone(),
+                                protocol,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -322,26 +325,36 @@ mod tests {
         headers.insert("content-type", "application/json".parse().unwrap());
         let body =
             br#"{"model":"allowed","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}"#;
-        assert!(
-            policy
-                .authorize(
-                    &hyper::Method::POST,
-                    &"/opencode-go/v1/messages".parse().unwrap(),
-                    &headers,
-                    body
-                )
-                .is_ok()
-        );
-        assert!(
-            policy
-                .authorize(
-                    &hyper::Method::POST,
-                    &"/opencode-go/v1/chat/completions".parse().unwrap(),
-                    &headers,
-                    body
-                )
-                .is_err()
-        );
+        let mut endpoints = Vec::new();
+        for prefix in ["", "v1/"] {
+            let uri = format!("/opencode-go/{prefix}messages").parse().unwrap();
+            let authorized = policy
+                .authorize(&hyper::Method::POST, &uri, &headers, body)
+                .unwrap();
+            endpoints.push(authorized.into_parts().0);
+            let forbidden = br#"{"model":"forbidden","max_tokens":1024,"messages":[{"role":"user","content":"hi"}]}"#;
+            assert_eq!(
+                policy
+                    .authorize(&hyper::Method::POST, &uri, &headers, forbidden)
+                    .err()
+                    .unwrap()
+                    .status,
+                hyper::StatusCode::FORBIDDEN
+            );
+            for suffix in ["chat/completions", "messages/extra", "messages?url=evil"] {
+                assert!(
+                    policy
+                        .authorize(
+                            &hyper::Method::POST,
+                            &format!("/opencode-go/{prefix}{suffix}").parse().unwrap(),
+                            &headers,
+                            body
+                        )
+                        .is_err()
+                );
+            }
+        }
+        assert!(Arc::ptr_eq(&endpoints[0], &endpoints[1]));
         let registry: RegistryFile = serde_json::from_value(
             json!({"upstreams":{"opencode-go":{"models":[],"messages":endpoint(&key)}}}),
         )
@@ -359,7 +372,12 @@ mod tests {
         let policy = registry.load().unwrap();
         let mut headers = HeaderMap::new();
         headers.insert("content-type", "application/json".parse().unwrap());
-        for path in ["/provider/v1/messages", "/provider/v1/chat/completions"] {
+        for path in [
+            "/provider/messages",
+            "/provider/v1/messages",
+            "/provider/chat/completions",
+            "/provider/v1/chat/completions",
+        ] {
             let uri = path.parse().unwrap();
             let mut body = json!({"model":"new-provider/model", "max_tokens":1024,
                 "messages":[{"role":"user","content":"hi"}]});
