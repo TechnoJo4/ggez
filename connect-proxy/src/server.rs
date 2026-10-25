@@ -1,6 +1,6 @@
 use crate::{
     client::Client,
-    policy::{AuthorizedRequest, Policy},
+    policy::{AuthorizedRequest, Policy, hostname},
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
@@ -49,6 +49,14 @@ pub(crate) fn connect_host(head: &[u8], policy: &Policy) -> Result<String, ()> {
     let authority = request.path.ok_or(())?;
     let host = authority.strip_suffix(":443").ok_or(())?;
     if !policy.contains(host) {
+        if hostname(host) {
+            eprintln!(
+                "connect-proxy: CONNECT denied for host={host:?}: upstream is not configured"
+            );
+        } else {
+            // Invalid authorities can contain credentials; do not echo them.
+            eprintln!("connect-proxy: CONNECT denied: invalid upstream hostname");
+        }
         return Err(());
     }
     let mut host_count = 0;
