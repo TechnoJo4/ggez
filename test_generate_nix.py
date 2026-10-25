@@ -32,9 +32,19 @@ class ExportTests(unittest.TestCase):
         (self.root / "git.json").write_text(json.dumps(self.upstreams))
         self.proxy_upstreams = {"cache.example": {"policy": "nix-cache"}, "forge.example": {"policy": "git"}}
         (self.root / "proxy.json").write_text(json.dumps(self.proxy_upstreams))
+        self.inference_upstreams = {"upstreams": {
+            "provider": {
+                "models": ["allowed"],
+                "metadata": {"pi_ai_provider_id": "provider", "arbitrary": {"nested": [1, True, None]}},
+                "messages": {"url": "https://private.example/v1/messages", "authentication": {"kind": "bearer", "key_file": "DO NOT EXPORT"}},
+            },
+            "unrestricted": {"completions": {"url": "https://private.example/v1/chat/completions"}},
+        }}
+        (self.root / "inference.json").write_text(json.dumps(self.inference_upstreams))
         (self.root / "public-ca.crt").write_text("public certificate")
         (self.root / "private-ca.key").write_text("DO NOT EXPORT")
         self.compose = {"services": {
+            "inference": {"build": {"context": ".", "dockerfile": "inference/Dockerfile"}, "command": ["--host-inference-listener-uds", "/run/changed.sock_9001", "--host-upstreams-config", "/registry.json"], "volumes": [{"type": "bind", "source": "inference.json", "target": "/registry.json"}]},
             "git": {"build": {"context": ".", "dockerfile": "read-only-git/Dockerfile"}, "command": ["--host-git-listener-uds", "/run/changed.sock_9003", "--host-upstreams-config", "/registry.json"], "volumes": [{"type": "bind", "source": "git.json", "target": "/registry.json"}]},
             "proxy": {"build": {"context": ".", "dockerfile": "connect-proxy/Dockerfile"}, "command": ["--host-proxy-listener-uds", "/run/changed.sock_9004", "--host-ca-certificate", "/root.crt", "--host-upstreams-config", "/registry.json"], "volumes": [{"type": "bind", "source": "public-ca.crt", "target": "/root.crt"}, {"type": "bind", "source": "private-ca.key", "target": "/ca.key"}, {"type": "bind", "source": "proxy.json", "target": "/registry.json"}]},
             "ssh": {"build": {"context": "./guest-bridge", "dockerfile": "Dockerfile"}, "command": ["--guest-listener-vsock-port", "2222"], "labels": {"ggez.guest-tcp-port": "22"}},
@@ -62,6 +72,20 @@ class ExportTests(unittest.TestCase):
         generator.export(self.compose, self.output)
         self.assertEqual(json.loads((self.output / "deployment.json").read_text())["git"]["upstreams"], self.upstreams)
 
+    def test_inference_exports_models_and_arbitrary_metadata_without_host_endpoint_config(self):
+        for models in [["allowed"], ["new-model", "another-model"]]:
+            provider = self.inference_upstreams["upstreams"]["provider"]
+            provider["models"] = models
+            (self.root / "inference.json").write_text(json.dumps(self.inference_upstreams))
+            generator.export(self.compose, self.output)
+            deployment = json.loads((self.output / "deployment.json").read_text())
+            self.assertEqual(deployment["inference"]["upstreams"], {
+                "provider": {"models": models, "metadata": provider["metadata"]},
+                "unrestricted": {"models": None, "metadata": {}},
+            })
+            self.assertNotIn("private.example", json.dumps(deployment))
+            self.assertNotIn("DO NOT EXPORT", json.dumps(deployment))
+
     @unittest.skipUnless(generator.shutil.which("docker-compose") or generator.shutil.which("docker"), "Compose CLI unavailable")
     def test_guest_generation_needs_no_host_environment_daemon_or_secret_files(self):
         if not generator.shutil.which("docker-compose") and generator.subprocess.call(
@@ -75,9 +99,11 @@ class ExportTests(unittest.TestCase):
             compose = generator.compose_config()
             git = compose["services"]["read-only-git"]
             proxy = compose["services"]["connect-proxy"]
+            inference = compose["services"]["inference"]
             for service, flag, content in [
                 (git, "--host-upstreams-config", json.dumps(self.upstreams)),
                 (proxy, "--host-upstreams-config", json.dumps(self.proxy_upstreams)),
+                (inference, "--host-upstreams-config", json.dumps(self.inference_upstreams)),
                 (proxy, "--host-ca-certificate", "public certificate"),
             ]:
                 path = generator.mounted_file(service, generator.argument(service, flag))
@@ -90,8 +116,8 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(deployment["connect-proxy"]["nixSubstituters"], ["https://cache.example"])
         self.assertEqual((self.output / "connect-proxy/ca.crt").read_text(), "public certificate")
         self.assertFalse((self.root / ".env").exists())
-        inference = compose["services"]["inference"]
-        self.assertFalse(generator.mounted_file(inference, generator.argument(inference, "--host-upstreams-config")).exists())
+        self.assertEqual(deployment["inference"]["upstreams"]["provider"]["models"], ["allowed"])
+        self.assertFalse((self.root / "DO NOT EXPORT").exists())
 
     def test_missing_public_ca_does_not_write_half_an_export(self):
         (self.root / "public-ca.crt").unlink()

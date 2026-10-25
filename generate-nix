@@ -80,6 +80,13 @@ def export(compose, output):
         if not 1 <= tcp <= 65535 or not 1 <= port < 2**32 - 1:
             raise ValueError(f"invalid guest port for {name}")
         deployment = {"name": name, "vsockPort": port, "guestTcpPort": tcp, "gateway": gateway}
+        if gateway == "inference":
+            config = argument(service, "--host-upstreams-config")
+            upstreams = json.loads(mounted_file(service, config).read_text())["upstreams"]
+            deployment["upstreams"] = {
+                name: {"models": upstream.get("models"), "metadata": upstream.get("metadata", {})}
+                for name, upstream in upstreams.items()
+            }
         if gateway == "read-only-git":
             config = argument(service, "--host-upstreams-config")
             upstreams = json.loads(mounted_file(service, config).read_text())

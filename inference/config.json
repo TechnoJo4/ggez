@@ -1,6 +1,18 @@
 {
   "upstreams": {
     "opencode-go": {
+      "metadata": {
+        "pi_ai_provider_id": "opencode-go"
+      },
+      "models": [
+        "glm-5.3",
+        "glm-5.3-flash",
+        "kimi-k2.7-code",
+        "kimi-k3.1-pro",
+        "deepseek-v4.1-flash",
+        "deepseek-v4-pro",
+        "gemini-4-argon"
+      ],
       "completions": {
         "url": "https://opencode.ai/zen/go/v1/chat/completions",
         "authentication": {
@@ -19,6 +31,13 @@
       }
     },
     "deepseek": {
+      "metadata": {
+        "pi_ai_provider_id": "deepseek"
+      },
+      "models": [
+        "deepseek-flash",
+        "deepseek-v4-pro"
+      ],
       "messages": {
         "url": "https://api.deepseek.com/anthropic/v1/messages",
         "authentication": {

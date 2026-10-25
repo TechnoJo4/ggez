@@ -44,6 +44,8 @@ pub struct RegistryFile {
 #[serde(deny_unknown_fields)]
 pub struct UpstreamConfig {
     pub models: Option<Vec<String>>,
+    #[serde(default)]
+    pub metadata: BTreeMap<String, serde::de::IgnoredAny>,
     pub completions: Option<EndpointConfig>,
     pub messages: Option<EndpointConfig>,
 }
@@ -316,9 +318,11 @@ mod tests {
     #[test]
     fn registry_loads_named_routes_and_explicit_model_whitelists() {
         let key = Secret::new();
-        let registry: RegistryFile = serde_json::from_value(
-            json!({"upstreams":{"opencode-go":{"models":["allowed"],"messages":endpoint(&key)}}}),
-        )
+        let registry: RegistryFile = serde_json::from_value(json!({"upstreams":{"opencode-go":{
+            "models":["allowed"],
+            "metadata":{"pi_ai_provider_id":"opencode-go","arbitrary":{"nested":[1,true,null]}},
+            "messages":endpoint(&key)
+        }}}))
         .unwrap();
         let policy = registry.load().unwrap();
         let mut headers = HeaderMap::new();
@@ -443,6 +447,18 @@ mod tests {
     #[test]
     fn registry_and_secret_fail_closed_on_bad_input() {
         let key = Secret::new();
+        for metadata in [
+            json!(null),
+            json!([]),
+            json!("provider"),
+            json!(1),
+            json!(true),
+        ] {
+            assert!(
+                serde_json::from_value::<UpstreamConfig>(json!({"metadata":metadata})).is_err()
+            );
+        }
+        assert!(serde_json::from_value::<UpstreamConfig>(json!({"unexpected":{}})).is_err());
         let mut config = endpoint(&key);
         config["unexpected"] = json!(true);
         assert!(serde_json::from_value::<EndpointConfig>(config).is_err());
