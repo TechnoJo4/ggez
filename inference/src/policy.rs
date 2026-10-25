@@ -90,12 +90,6 @@ impl Policy {
                 "absolute request URIs are not allowed",
             ));
         }
-        if uri.query().is_some() {
-            return Err(Rejection::new(
-                StatusCode::BAD_REQUEST,
-                "request query parameters are not allowed",
-            ));
-        }
         if headers.contains_key("upgrade") {
             return Err(Rejection::new(
                 StatusCode::BAD_REQUEST,
@@ -132,6 +126,15 @@ impl Policy {
         let route = self.routes.get(uri.path()).ok_or_else(|| {
             Rejection::new(StatusCode::NOT_FOUND, "no configured inference route")
         })?;
+        // The Anthropic SDK adds this marker; upstream URLs remain host-controlled.
+        if uri.query().is_some_and(|query| {
+            query != "beta=true" || !matches!(route.protocol, Protocol::Messages)
+        }) {
+            return Err(Rejection::new(
+                StatusCode::BAD_REQUEST,
+                "only beta=true is allowed as a query on messages routes",
+            ));
+        }
         let mut body: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
             Rejection::new(
                 StatusCode::BAD_REQUEST,

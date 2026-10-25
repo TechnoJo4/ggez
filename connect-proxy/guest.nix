@@ -7,6 +7,8 @@ let
     PIP_CERT = toString config.security.pki.caBundle;
     CARGO_HTTP_CAINFO = toString config.security.pki.caBundle;
     NODE_EXTRA_CA_CERTS = toString config.security.pki.caBundle;
+    DENO_CERT = toString config.security.pki.caBundle;
+    DENO_NO_UPDATE_CHECK = "1";
     npm_config_audit = "false";
     NIX_GIT_SSL_CAINFO = toString config.security.pki.caBundle;
     NIX_CURL_FLAGS = "--cacert ${config.security.pki.caBundle}";

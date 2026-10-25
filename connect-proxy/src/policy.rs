@@ -5,11 +5,11 @@ mod github;
 mod github_api;
 mod github_codeload;
 mod gitlab;
+mod jsr;
 mod nix_cache;
 mod npm;
 mod pypi;
 mod pypi_files;
-mod sheetjs;
 mod sourcehut;
 
 use git_policy::{AuthorizedRead as GitRead, GitPolicy, clean_segment};
@@ -29,11 +29,11 @@ pub enum UpstreamConfig {
     GithubCodeload {},
     Forgejo {},
     Gitlab {},
+    Jsr {},
     NixCache {},
     Npm {},
     Pypi {},
     PypiFiles {},
-    Sheetjs {},
     Sourcehut {},
 }
 
@@ -42,10 +42,10 @@ impl UpstreamConfig {
         matches!(
             self,
             Self::NixCache {}
+                | Self::Jsr {}
                 | Self::Npm {}
                 | Self::Pypi {}
                 | Self::PypiFiles {}
-                | Self::Sheetjs {}
                 | Self::CargoIndex {}
                 | Self::CargoFiles {}
         )
@@ -72,11 +72,11 @@ impl UpstreamConfig {
             Self::GithubCodeload {} => github_codeload::authorize(uri),
             Self::Forgejo {} => forgejo::authorize(uri),
             Self::Gitlab {} => gitlab::authorize(uri),
+            Self::Jsr {} => jsr::authorize(uri),
             Self::NixCache {} => nix_cache::authorize(uri),
             Self::Npm {} => npm::authorize(uri),
             Self::Pypi {} => pypi::authorize(uri),
             Self::PypiFiles {} => pypi_files::authorize(uri),
-            Self::Sheetjs {} => sheetjs::authorize(uri),
             Self::Sourcehut {} => sourcehut::authorize(uri),
         }
     }
@@ -90,11 +90,11 @@ impl UpstreamConfig {
             Self::Gitlab {} => gitlab::redirects_to(host, next, next_host),
             Self::Sourcehut {} => sourcehut::redirects_to(host, next, next_host),
             Self::Git {}
+            | Self::Jsr {}
             | Self::NixCache {}
             | Self::Npm {}
             | Self::Pypi {}
             | Self::PypiFiles {}
-            | Self::Sheetjs {}
             | Self::CargoIndex {}
             | Self::CargoFiles {} => false,
         }
@@ -269,6 +269,9 @@ impl Policy {
         forwarded.insert("accept-encoding", "identity".parse().unwrap());
         if let ReadOperation::Lookup { accept } = &operation {
             forwarded.insert("accept", accept.parse().unwrap());
+        } else if upstream.kind == (UpstreamConfig::Jsr {}) {
+            // JSR shares module URLs with its HTML frontend.
+            forwarded.insert("accept", "*/*".parse().unwrap());
         }
         let url =
             Url::parse(&format!("https://{host}{uri}")).map_err(|_| StatusCode::BAD_REQUEST)?;

@@ -130,14 +130,16 @@ fn gateway(completion_origin: &str, messages_origin: &str, other_origin: &str) -
             key,
             vec!["x-opencode-session".parse().unwrap()],
         ));
-        routes.insert(
-            path.into(),
-            Route {
-                endpoint,
-                models: Some(models),
-                protocol,
-            },
-        );
+        for path in [path.to_owned(), path.replacen("/v1/", "/", 1)] {
+            routes.insert(
+                path,
+                Route {
+                    endpoint: endpoint.clone(),
+                    models: Some(models.clone()),
+                    protocol,
+                },
+            );
+        }
     }
     Arc::new(Gateway {
         policy: Policy::new(routes),
@@ -209,6 +211,79 @@ async fn upstream_and_protocol_routes_keep_credentials_and_payloads_separate() {
 }
 
 #[tokio::test]
+async fn messages_beta_query_is_consumed_without_forwarding_it() {
+    let origin = Origin::new(StatusCode::OK, r#"{"ok":true}"#).await;
+    let gateway = gateway(&origin.url, &origin.url, &origin.url);
+    for path in [
+        "/opencode-go/messages?beta=true",
+        "/opencode-go/v1/messages?beta=true",
+    ] {
+        let reply = exchange(gateway.clone(), &request(path, &messages().to_string())).await;
+        assert!(reply.starts_with(b"HTTP/1.1 200"));
+    }
+    let recorded = origin.requests.lock().unwrap();
+    assert_eq!(recorded.len(), 2);
+    for request in recorded.iter() {
+        assert_eq!(request.path, "/native/messages");
+        assert_eq!(request.body["model"], "allowed");
+        assert!(!request.headers.contains_key("anthropic-beta"));
+    }
+}
+
+#[test]
+fn queries_are_restricted_to_the_exact_messages_beta_marker() {
+    let gateway = gateway(
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1",
+        "http://127.0.0.1:1",
+    );
+    let mut headers = HeaderMap::new();
+    headers.insert("content-type", "application/json".parse().unwrap());
+    for prefix in ["", "v1/"] {
+        for (suffix, body, queries) in [
+            (
+                "messages",
+                messages(),
+                vec![
+                    "",
+                    "beta",
+                    "beta=false",
+                    "beta=True",
+                    "beta=%74rue",
+                    "%62eta=true",
+                    "beta=true&beta=true",
+                    "beta=true&url=evil",
+                    "url=evil&beta=true",
+                    "beta=true&",
+                ],
+            ),
+            ("chat/completions", completions(), vec!["beta=true"]),
+        ] {
+            for query in queries {
+                let uri = format!("/opencode-go/{prefix}{suffix}?{query}")
+                    .parse()
+                    .unwrap();
+                assert_eq!(
+                    gateway
+                        .policy
+                        .authorize(
+                            &hyper::Method::POST,
+                            &uri,
+                            &headers,
+                            &serde_json::to_vec(&body).unwrap()
+                        )
+                        .err()
+                        .unwrap()
+                        .status,
+                    StatusCode::BAD_REQUEST,
+                    "accepted query on {uri}"
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn rejected_capabilities_models_and_route_overrides_make_no_upstream_calls() {
     let origin = Origin::new(StatusCode::OK, "unused").await;
     let gateway = gateway(&origin.url, &origin.url, &origin.url);
@@ -246,7 +321,11 @@ async fn rejected_capabilities_models_and_route_overrides_make_no_upstream_calls
     forbidden.push(("/opencode-go/v1/messages", server_tools));
     let mut mcp = messages();
     mcp["mcp_servers"] = json!([{"url":"https://evil"}]);
-    forbidden.push(("/opencode-go/v1/messages", mcp));
+    forbidden.push(("/opencode-go/v1/messages", mcp.clone()));
+    forbidden.push(("/opencode-go/v1/messages?beta=true", mcp));
+    let mut forbidden_model = messages();
+    forbidden_model["model"] = json!("forbidden");
+    forbidden.push(("/opencode-go/messages?beta=true", forbidden_model));
     forbidden.push(("/openrouter/v1/chat/completions", completions()));
     forbidden.push((
         "/opencode-go/v1/chat/completions?url=https://evil",

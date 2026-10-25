@@ -423,6 +423,129 @@ async fn javascript_install(program: &'static str) {
 }
 
 #[tokio::test]
+async fn unmodified_deno_resolves_jsr_and_uses_a_cold_lockfile_through_connect() {
+    if !available("deno", &["--version"]) {
+        return;
+    }
+    let mut client = PackageClient::new();
+    // Let Deno calculate the same SHA-256 file checksums its loader verifies.
+    let output = checked(
+        command("deno", &client.work)
+            .env("DENO_NO_UPDATE_CHECK", "1")
+            .args([
+                "eval",
+                r#"
+const files = {
+  "/mod.ts": 'export { value } from "./nested/value.ts";\n',
+  "/nested/value.ts": 'export const value: string = "through the package gateway";\n',
+};
+const manifest = {};
+for (const [path, source] of Object.entries(files)) {
+  const bytes = new TextEncoder().encode(source);
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+  const hex = Array.from(digest, b => b.toString(16).padStart(2, "0")).join("");
+  manifest[path] = { size: bytes.length, checksum: `sha256-${hex}` };
+}
+console.log(JSON.stringify({ files, metadata: { manifest, exports: { ".": "./mod.ts" } } }));
+"#,
+            ]),
+    );
+    let fixture: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let mut routes = HashMap::from([
+        (
+            ("jsr.io".into(), "/@fixture/pkg/meta.json".into()),
+            (
+                "application/json".into(),
+                br#"{"scope":"fixture","name":"pkg","latest":"1.0.0","versions":{"1.0.0":{}}}"#
+                    .to_vec(),
+            ),
+        ),
+        (
+            ("jsr.io".into(), "/@fixture/pkg/1.0.0_meta.json".into()),
+            (
+                "application/json".into(),
+                fixture["metadata"].to_string().into_bytes(),
+            ),
+        ),
+    ]);
+    for (path, source) in fixture["files"].as_object().unwrap() {
+        routes.insert(
+            ("jsr.io".into(), format!("/@fixture/pkg/1.0.0{path}")),
+            (
+                "text/typescript".into(),
+                source.as_str().unwrap().as_bytes().to_vec(),
+            ),
+        );
+    }
+    let origin = Origin::with_routes(routes).await;
+    fs::write(client.work.join("deno.json"), "{}\n").unwrap();
+    fs::write(
+        client.work.join("main.ts"),
+        "import { value } from 'jsr:@fixture/pkg@^1.0.0';\nconsole.log(value);\n",
+    )
+    .unwrap();
+    let proxy = client.proxy(&origin).await;
+    let work = client.work.clone();
+    tokio::task::spawn_blocking(move || {
+        let run = |directory: &Path, locked: bool| {
+            let mut run = command("deno", directory);
+            run.args(["run", "--no-check"]);
+            if locked {
+                run.arg("--frozen-lockfile");
+            }
+            let output = checked(
+                run.arg("main.ts")
+                    .env("https_proxy", &proxy)
+                    .env("DENO_CERT", work.join("ca.crt"))
+                    .env("DENO_NO_UPDATE_CHECK", "1")
+                    .env("DENO_DIR", directory.join("cache")),
+            );
+            assert_eq!(
+                String::from_utf8(output.stdout).unwrap().trim(),
+                "through the package gateway"
+            );
+        };
+        run(&work, false);
+        let lock = fs::read(work.join("deno.lock")).unwrap();
+        assert!(String::from_utf8_lossy(&lock).contains("@fixture/pkg@1.0.0"));
+        let locked = work.join("locked");
+        fs::create_dir(&locked).unwrap();
+        for file in ["main.ts", "deno.json", "deno.lock"] {
+            fs::copy(work.join(file), locked.join(file)).unwrap();
+        }
+        run(&locked, true);
+        assert_eq!(fs::read(locked.join("deno.lock")).unwrap(), lock);
+    })
+    .await
+    .unwrap();
+    let requests = origin.requests.lock().unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|r| r.0 == "jsr.io" && r.2 == "/@fixture/pkg/meta.json")
+    );
+    for path in [
+        "/@fixture/pkg/1.0.0_meta.json",
+        "/@fixture/pkg/1.0.0/mod.ts",
+        "/@fixture/pkg/1.0.0/nested/value.ts",
+    ] {
+        assert!(
+            requests
+                .iter()
+                .filter(|r| r.0 == "jsr.io" && r.2 == path)
+                .count()
+                >= 2,
+            "missing cold lockfile fetch for {path}"
+        );
+    }
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.1 == Method::GET && r.4.is_empty())
+    );
+}
+
+#[tokio::test]
 async fn unmodified_npm_installs_npm_and_jsr_packages_and_uses_the_lockfile_through_connect() {
     if available(NPM, &["--version"]) {
         javascript_install(NPM).await;

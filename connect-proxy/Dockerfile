@@ -1,6 +1,6 @@
 FROM docker.io/library/rust@sha256:0cce0a5e0e8ba67b455257a3a02a1d99005f382748789d6464460028810f1627 AS build
 WORKDIR /src/connect-proxy
-RUN apk add --no-cache nix python3 py3-pip nodejs npm
+RUN apk add --no-cache nix python3 py3-pip nodejs npm deno
 COPY git-policy /src/git-policy
 COPY host-runtime /src/host-runtime
 COPY connect-proxy/Cargo.toml connect-proxy/Cargo.lock ./
