@@ -111,6 +111,7 @@ services:
       network: host
       entitlements:
         - network.host
+    network_mode: host
     command:
       - --host-proxy-listener-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5004"
