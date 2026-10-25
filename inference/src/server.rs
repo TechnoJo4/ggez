@@ -4,7 +4,7 @@ use crate::{
 };
 use bytes::Bytes;
 use futures_util::StreamExt;
-use http_body_util::{BodyExt, Full, Limited, StreamBody};
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited, StreamBody};
 use hyper::{
     Request, Response, StatusCode,
     body::{Body, Frame, Incoming},
@@ -144,10 +144,30 @@ async fn handle(
     request: Request<Incoming>,
 ) -> Result<Response<ResponseBody>, Infallible> {
     let (parts, body) = request.into_parts();
+    let context = format!("{} path={:?}", parts.method, parts.uri.path());
     let body = match Limited::new(body, gateway.max_body).collect().await {
         Ok(body) if body.trailers().is_none() => body.to_bytes(),
-        Ok(_) => return Ok(error(StatusCode::BAD_REQUEST)),
-        Err(_) => return Ok(error(StatusCode::PAYLOAD_TOO_LARGE)),
+        Ok(_) => {
+            eprintln!("inference: 400 {context}: request trailers are not allowed");
+            return Ok(error(StatusCode::BAD_REQUEST));
+        }
+        Err(cause) => {
+            let status = if cause.is::<LengthLimitError>() {
+                eprintln!(
+                    "inference: 413 {context}: request body exceeds {} byte size bound: {}",
+                    gateway.max_body,
+                    host_runtime::error_chain(cause.as_ref())
+                );
+                StatusCode::PAYLOAD_TOO_LARGE
+            } else {
+                eprintln!(
+                    "inference: 400 {context}: request body read failed: {}",
+                    host_runtime::error_chain(cause.as_ref())
+                );
+                StatusCode::BAD_REQUEST
+            };
+            return Ok(error(status));
+        }
     };
     let authorized =
         match gateway
@@ -155,9 +175,14 @@ async fn handle(
             .authorize(&parts.method, &parts.uri, &parts.headers, &body)
         {
             Ok(request) => request,
-            Err(status) => return Ok(error(status)),
+            Err(rejection) => {
+                eprintln!(
+                    "inference: {} {context}: {}",
+                    rejection.status, rejection.reason
+                );
+                return Ok(error(rejection.status));
+            }
         };
-    let context = format!("{} path={:?}", parts.method, parts.uri.path());
     let (upstream, response_kind) = match gateway.client.fetch(authorized).await {
         Ok(response) => response,
         Err(cause) => return Ok(bad_gateway(&context, host_runtime::error_chain(&cause))),
@@ -185,9 +210,7 @@ async fn handle(
         }
     }
     if status.is_client_error() || status.is_server_error() {
-        if status.is_server_error() {
-            eprintln!("inference: {status} {context}: upstream error");
-        }
+        eprintln!("inference: {status} {context}: upstream error");
         // Keep status/backoff semantics, without reflecting credential-bearing provider errors.
         let mut response = error(status);
         headers.remove("content-type");

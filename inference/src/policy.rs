@@ -37,6 +37,21 @@ pub(crate) struct Policy {
     routes: HashMap<String, Route>,
 }
 
+#[derive(Debug)]
+pub(crate) struct Rejection {
+    pub status: StatusCode,
+    pub reason: String,
+}
+
+impl Rejection {
+    fn new(status: StatusCode, reason: impl std::fmt::Display) -> Self {
+        Self {
+            status,
+            reason: reason.to_string(),
+        }
+    }
+}
+
 // Constructible only after route, model, and capability validation.
 pub(crate) struct AuthorizedRequest {
     endpoint: Arc<Endpoint>,
@@ -62,17 +77,36 @@ impl Policy {
         uri: &Uri,
         headers: &HeaderMap,
         body: &[u8],
-    ) -> Result<AuthorizedRequest, StatusCode> {
+    ) -> Result<AuthorizedRequest, Rejection> {
         if method != Method::POST {
-            return Err(StatusCode::METHOD_NOT_ALLOWED);
+            return Err(Rejection::new(
+                StatusCode::METHOD_NOT_ALLOWED,
+                "expected POST",
+            ));
         }
-        if uri.scheme().is_some()
-            || uri.authority().is_some()
-            || uri.query().is_some()
-            || headers.contains_key("upgrade")
-            || headers.contains_key("content-encoding")
-        {
-            return Err(StatusCode::BAD_REQUEST);
+        if uri.scheme().is_some() || uri.authority().is_some() {
+            return Err(Rejection::new(
+                StatusCode::BAD_REQUEST,
+                "absolute request URIs are not allowed",
+            ));
+        }
+        if uri.query().is_some() {
+            return Err(Rejection::new(
+                StatusCode::BAD_REQUEST,
+                "request query parameters are not allowed",
+            ));
+        }
+        if headers.contains_key("upgrade") {
+            return Err(Rejection::new(
+                StatusCode::BAD_REQUEST,
+                "protocol upgrades are not allowed",
+            ));
+        }
+        if headers.contains_key("content-encoding") {
+            return Err(Rejection::new(
+                StatusCode::BAD_REQUEST,
+                "request content-encoding is not supported",
+            ));
         }
         for value in headers.get_all("connection") {
             if !value.to_str().is_ok_and(|s| {
@@ -83,32 +117,58 @@ impl Policy {
                     )
                 })
             }) {
-                return Err(StatusCode::BAD_REQUEST);
+                return Err(Rejection::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid connection header; only close/keep-alive are allowed",
+                ));
             }
         }
         if !crate::content_type(headers, "application/json") {
-            return Err(StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            return Err(Rejection::new(
+                StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                "expected content-type application/json",
+            ));
         }
-        let route = self.routes.get(uri.path()).ok_or(StatusCode::NOT_FOUND)?;
-        let mut body: serde_json::Value =
-            serde_json::from_slice(body).map_err(|_| StatusCode::BAD_REQUEST)?;
+        let route = self.routes.get(uri.path()).ok_or_else(|| {
+            Rejection::new(StatusCode::NOT_FOUND, "no configured inference route")
+        })?;
+        let mut body: serde_json::Value = serde_json::from_slice(body).map_err(|error| {
+            Rejection::new(
+                StatusCode::BAD_REQUEST,
+                format_args!("JSON parse failed ({:?}): {error}", error.classify()),
+            )
+        })?;
+        if !body.is_object() {
+            return Err(Rejection::new(
+                StatusCode::BAD_REQUEST,
+                "schema validation failed: body path=\"\": expected an object",
+            ));
+        }
         let model = body
             .get("model")
             .and_then(serde_json::Value::as_str)
             .filter(|model| !model.is_empty() && model.len() <= 256)
-            .ok_or(StatusCode::BAD_REQUEST)?;
+            .ok_or_else(|| Rejection::new(StatusCode::BAD_REQUEST, "schema validation failed: body path=\"/model\": expected a nonempty string up to 256 bytes"))?;
         if route
             .models
             .as_ref()
             .is_some_and(|models| !models.contains(model))
         {
-            return Err(StatusCode::FORBIDDEN);
+            return Err(Rejection::new(
+                StatusCode::FORBIDDEN,
+                "body path=\"/model\": model is not in the upstream whitelist",
+            ));
         }
         match route.protocol {
             Protocol::Completions => protocols::completions(&body),
             Protocol::Messages => protocols::messages(&body),
         }
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|error| {
+            Rejection::new(
+                StatusCode::BAD_REQUEST,
+                format_args!("schema validation failed: {error}"),
+            )
+        })?;
         let response_kind = if body
             .get("stream")
             .and_then(serde_json::Value::as_bool)
@@ -123,7 +183,10 @@ impl Policy {
         let mut forwarded = HeaderMap::new();
         for name in &route.endpoint.guest_headers {
             if headers.get_all(name).iter().count() > 1 {
-                return Err(StatusCode::BAD_REQUEST);
+                return Err(Rejection::new(
+                    StatusCode::BAD_REQUEST,
+                    format_args!("duplicate guest header {name:?}"),
+                ));
             }
             if let Some(value) = headers.get(name) {
                 forwarded.insert(name.clone(), value.clone());
@@ -131,7 +194,12 @@ impl Policy {
         }
         // Re-encode what we validated; never forward duplicate-key JSON verbatim.
         let body = serde_json::to_vec(&body)
-            .map_err(|_| StatusCode::BAD_REQUEST)?
+            .map_err(|error| {
+                Rejection::new(
+                    StatusCode::BAD_REQUEST,
+                    format_args!("could not encode validated request JSON: {error}"),
+                )
+            })?
             .into();
         Ok(AuthorizedRequest {
             endpoint: route.endpoint.clone(),
