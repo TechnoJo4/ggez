@@ -29,6 +29,9 @@ x-guest-bridge: &guest-bridge
   build:
     context: .
     dockerfile: guest-bridge/Dockerfile
+    network: host
+    entitlements:
+      - network.host
   network_mode: none
   volumes:
     - <<: *firecracker-sockets
@@ -38,6 +41,7 @@ x-guest-bridge: &guest-bridge
 services:
   ssh-bridge:
     <<: *guest-bridge
+    image: ggez-guest-bridge
     command:
       - --guest-listener-vsock-port
       - "22"
@@ -48,6 +52,7 @@ services:
 
   dsh-bridge:
     <<: *guest-bridge
+    image: ggez-guest-bridge
     labels:
       ggez.guest-tcp-port: "3080"
     command:
@@ -60,9 +65,13 @@ services:
 
   inference:
     <<: *gateway
+    image: ggez-inference
     build:
       context: .
       dockerfile: inference/Dockerfile
+      network: host
+      entitlements:
+        - network.host
     command:
       - --host-inference-listener-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5001"
@@ -70,16 +79,20 @@ services:
       - /config.json
     volumes:
       - *firecracker-sockets
-      - ./inference.json:/config.json:ro
+      - ./inference/config.json:/config.json:ro
     secrets:
       - opencode_go_key
       - deepseek_key
 
   read-only-git:
     <<: *gateway
+    image: ggez-read-only-git
     build:
       context: .
       dockerfile: read-only-git/Dockerfile
+      network: host
+      entitlements:
+        - network.host
     command:
       - --host-git-listener-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5003"
@@ -87,13 +100,17 @@ services:
       - /config.json
     volumes:
       - *firecracker-sockets
-      - ./read-only-git.json:/config.json:ro
+      - ./read-only-git/config.json:/config.json:ro
 
   connect-proxy:
     <<: *gateway
+    image: ggez-connect-proxy
     build:
       context: .
       dockerfile: connect-proxy/Dockerfile
+      network: host
+      entitlements:
+        - network.host
     command:
       - --host-proxy-listener-uds
       - "${FIRECRACKER_VSOCK_UDS_PATH:?set Firecracker's full host uds_path}_5004"
@@ -102,16 +119,18 @@ services:
       - --host-ca-certificate
       - /ca.crt
       - --host-ca-signing-key
-      - /ca.key
+      - /run/secrets/proxy_ca_key
     volumes:
       - *firecracker-sockets
-      - ./connect-proxy.json:/config.json:ro
+      - ./connect-proxy/config.json:/config.json:ro
       - ./connect-proxy/ca.crt:/ca.crt:ro
-      - /mnt/mid/ez/ca.key:/ca.key:ro
+    secrets:
+      - proxy_ca_key
 
 secrets:
+  proxy_ca_key:
+    file: ./secrets/ca.key
   opencode_go_key:
     file: ./secrets/opencode_go_key
   deepseek_key:
     file: ./secrets/deepseek_key
-
